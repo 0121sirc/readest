@@ -1,0 +1,37 @@
+# NAS self-hosting overlay. Usage (from the docker/ directory):
+#
+#   docker compose -f compose.yaml -f compose.override.yaml up -d
+#
+# Two jobs:
+#   1. persist Postgres and MinIO to a NAS folder instead of named volumes
+#   2. bind every published port to 127.0.0.1 so only a host-side
+#      `tailscale serve` (or another local reverse proxy) can reach the stack
+#
+# The `!override` tag needs Docker Compose >= 2.24. On an older Compose,
+# delete the two "ports" blocks below and bind the ports to loopback by
+# editing compose.yaml directly instead.
+#
+# Adjust the bind-mount paths to your NAS shared folder. Keep them on a plain
+# directory, not on a folder that a dedup/sync service manages.
+
+services:
+  db:
+    volumes:
+      # Replaces the db-data named volume (volumes merge by container target).
+      - /volume1/docker/readest/db:/var/lib/postgresql/data:Z
+
+  minio:
+    volumes:
+      # Replaces the minio-data named volume.
+      - /volume1/docker/readest/minio:/data:z
+    ports: !override
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+
+  kong:
+    ports: !override
+      - "127.0.0.1:8000:8000"
+
+  client:
+    ports: !override
+      - "127.0.0.1:3000:3000"
