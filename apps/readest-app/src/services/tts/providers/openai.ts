@@ -15,7 +15,12 @@
 
 import type { TTSVoice } from '../types';
 import { getAPIBaseUrl } from '@/services/environment';
-import { getOpenAITTSConfig, isOpenAITTSConfigured, parseOpenAIVoices } from './openaiConfig';
+import {
+  getOpenAITTSConfig,
+  isOpenAITTSConfigured,
+  parseOpenAIVoices,
+  setOpenAITTSConfig,
+} from './openaiConfig';
 import {
   SpeechProvider,
   SpeechSynthesisPermanentError,
@@ -70,10 +75,35 @@ export class OpenAISpeechProvider implements SpeechProvider {
     return isOpenAITTSConfigured();
   }
 
+  // The voice list is the server's, fetched through our proxy (no CORS). The
+  // result is cached in the config so it survives a later fetch failure and can
+  // seed the default voice; the settings panel no longer edits it directly.
+  async #fetchServerVoices(): Promise<string[]> {
+    const config = getOpenAITTSConfig();
+    try {
+      const res = await fetch(`${getAPIBaseUrl()}/tts/openai/voices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: config.baseUrl, apiKey: config.apiKey }),
+      });
+      if (!res.ok) return [];
+      const data = (await res.json()) as { voices?: { id?: string }[] };
+      const ids = (data.voices ?? [])
+        .map((voice) => voice.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      if (ids.length > 0) setOpenAITTSConfig({ ...config, voices: ids.join(',') });
+      return ids;
+    } catch {
+      return [];
+    }
+  }
+
   async getAllVoices(): Promise<TTSVoice[]> {
     if (!isOpenAITTSConfigured()) return [];
-    const { voices } = getOpenAITTSConfig();
-    return parseOpenAIVoices(voices).map((id) => ({ id, name: id, lang: 'en' }));
+    const serverVoices = await this.#fetchServerVoices();
+    const ids =
+      serverVoices.length > 0 ? serverVoices : parseOpenAIVoices(getOpenAITTSConfig().voices);
+    return ids.map((id) => ({ id, name: id, lang: 'en' }));
   }
 
   get fallbackVoiceId(): string | undefined {

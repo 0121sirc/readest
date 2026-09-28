@@ -71,19 +71,44 @@ describe('OpenAISpeechProvider', () => {
     await expect(provider.getAllVoices()).resolves.toEqual([]);
   });
 
-  test('is available and exposes the configured voices once a base URL is set', async () => {
+  test('is available and exposes the voices fetched from the server', async () => {
     setOpenAITTSConfig({
       baseUrl: 'https://api.openai.com/v1',
       apiKey: 'sk-test',
       model: 'tts-1',
-      voices: 'alloy, nova',
+      voices: '',
       lookahead: 3,
     });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ voices: [{ id: 'bfy' }, { id: 'rxd' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
     const provider = new OpenAISpeechProvider();
     await expect(provider.init()).resolves.toBe(true);
     const voices = await provider.getAllVoices();
-    expect(voices.map((v) => v.id)).toEqual(['alloy', 'nova']);
-    expect(provider.pickDefaultVoice(voices)).toBe('alloy');
+    expect(voices.map((v) => v.id)).toEqual(['bfy', 'rxd']);
+    expect(provider.pickDefaultVoice(voices)).toBe('bfy');
+    // The fetched list is cached in the config for later/offline reads.
+    expect(getOpenAITTSConfig().voices).toBe('bfy,rxd');
+  });
+
+  test('falls back to the cached voice list when the server list fails', async () => {
+    setOpenAITTSConfig({
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      model: '',
+      voices: 'cached-voice',
+      lookahead: 3,
+    });
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('offline')) as unknown as typeof fetch;
+
+    const provider = new OpenAISpeechProvider();
+    const voices = await provider.getAllVoices();
+    expect(voices.map((v) => v.id)).toEqual(['cached-voice']);
   });
 
   test('posts the OpenAI speech payload and returns mp3 bytes', async () => {

@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { PiArrowsClockwise, PiSpinner } from 'react-icons/pi';
-import { MdCheck } from 'react-icons/md';
+import { PiSpinner } from 'react-icons/pi';
 import { useEnv } from '@/context/EnvContext';
 import { useReaderStore } from '@/store/readerStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -68,9 +67,6 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
   const [openaiTTSConfig, setOpenaiTTSConfigState] = useState<OpenAITTSConfig>(
     getOpenAITTSConfig(),
   );
-  const [openaiVoices, setOpenaiVoices] = useState<{ id: string; desc?: string }[]>([]);
-  const [openaiVoicesFetching, setOpenaiVoicesFetching] = useState(false);
-  const [openaiVoicesError, setOpenaiVoicesError] = useState('');
   const [openaiTesting, setOpenaiTesting] = useState(false);
 
   const updateTTSCacheConfig = (config: typeof ttsCacheConfig) => {
@@ -92,66 +88,33 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     [],
   );
 
-  // Fetch the endpoint's voice list (server-side via our proxy, so CORS never
-  // applies) and adopt all of them for the reader's voice picker.
-  const fetchOpenAIVoices = useCallback(async () => {
-    if (!openaiTTSConfig.baseUrl.trim() || openaiVoicesFetching) return;
-    setOpenaiVoicesFetching(true);
-    setOpenaiVoicesError('');
-    try {
-      const res = await fetch(`${getAPIBaseUrl()}/tts/openai/voices`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: openaiTTSConfig.baseUrl,
-          apiKey: openaiTTSConfig.apiKey,
-        }),
-      });
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        setOpenaiVoicesError(
-          _('Failed to fetch voices ({{status}})', { status: res.status }) +
-            (detail ? `: ${detail.slice(0, 120)}` : ''),
-        );
-        return;
-      }
-      const data = (await res.json()) as { voices?: { id: string; desc?: string }[] };
-      const voices = data.voices ?? [];
-      setOpenaiVoices(voices);
-      if (voices.length > 0) {
-        // Keep the current pick when it is still offered; otherwise default to
-        // the first voice.
-        const current = parseOpenAIVoices(openaiTTSConfig.voices)[0];
-        if (!current || !voices.some((v) => v.id === current)) {
-          updateOpenAITTSConfig({ voices: voices[0]!.id });
-        }
-      }
-    } catch (error) {
-      setOpenaiVoicesError(
-        `${_('Failed to fetch voices')}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      setOpenaiVoicesFetching(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    openaiTTSConfig.baseUrl,
-    openaiTTSConfig.apiKey,
-    openaiTTSConfig.voices,
-    openaiVoicesFetching,
-  ]);
-
-  const selectOpenAIVoice = (id: string) => {
-    updateOpenAITTSConfig({ voices: id });
-  };
-
   // Synthesize and play a short sample so the user can hear the configured
-  // endpoint and voice before reading a book.
+  // endpoint and voice before reading a book. The voice is the server's first
+  // (the same one used by default); it is fetched if not cached yet.
   const testOpenAITTS = useCallback(async () => {
     if (!openaiTTSConfig.baseUrl.trim() || openaiTesting) return;
-    const voice = parseOpenAIVoices(openaiTTSConfig.voices)[0] || openaiVoices[0]?.id || '';
     setOpenaiTesting(true);
     try {
+      let voice = parseOpenAIVoices(openaiTTSConfig.voices)[0] ?? '';
+      if (!voice) {
+        try {
+          const vr = await fetch(`${getAPIBaseUrl()}/tts/openai/voices`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              baseUrl: openaiTTSConfig.baseUrl,
+              apiKey: openaiTTSConfig.apiKey,
+            }),
+          });
+          if (vr.ok) {
+            const data = (await vr.json()) as { voices?: { id?: string }[] };
+            voice = data.voices?.[0]?.id ?? '';
+          }
+        } catch {
+          // Fall through with an empty voice; the server may apply its default.
+        }
+      }
+
       const res = await fetch(`${getAPIBaseUrl()}/tts/openai`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -188,7 +151,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
       setOpenaiTesting(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openaiTTSConfig, openaiVoices, openaiTesting]);
+  }, [openaiTTSConfig, openaiTesting]);
 
   const resetToDefaults = useResetViewSettings();
 
@@ -422,64 +385,6 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
             placeholder={_('Optional')}
             onChange={(event) => updateOpenAITTSConfig({ model: event.target.value })}
           />
-        </div>
-
-        {/* Voices: fetched from the endpoint, then all used for the picker */}
-        <div className='flex flex-col gap-2 py-3 pe-4'>
-          <div className='flex w-full items-center justify-between'>
-            <SettingLabel>{_('Voices')}</SettingLabel>
-            <button
-              type='button'
-              className='hover:bg-base-200 inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150'
-              onClick={fetchOpenAIVoices}
-              disabled={openaiVoicesFetching || !openaiTTSConfig.baseUrl.trim()}
-              title={_('Refresh Voices')}
-              aria-label={_('Refresh Voices')}
-            >
-              {openaiVoicesFetching ? (
-                <PiSpinner className='size-4 animate-spin' />
-              ) : (
-                <PiArrowsClockwise className='size-4' />
-              )}
-            </button>
-          </div>
-          {openaiVoices.length > 0 ? (
-            <div className='flex flex-col'>
-              {openaiVoices.map((voice) => {
-                const selected = parseOpenAIVoices(openaiTTSConfig.voices)[0] === voice.id;
-                return (
-                  <button
-                    key={voice.id}
-                    type='button'
-                    onClick={() => selectOpenAIVoice(voice.id)}
-                    className='hover:bg-base-200/60 flex w-full items-center gap-2 rounded-lg px-1 py-2 text-start'
-                  >
-                    <span className='flex h-6 w-6 shrink-0 items-center justify-center'>
-                      {selected && <MdCheck className='text-base-content' />}
-                    </span>
-                    <span className='flex min-w-0 flex-col'>
-                      <span className='text-sm'>{voice.id}</span>
-                      {voice.desc && (
-                        <span className='text-base-content/60 line-clamp-1 text-xs'>
-                          {voice.desc}
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            // Fallback for servers without a voices endpoint: type one id here.
-            <input
-              type='text'
-              className='input input-sm bg-base-100 text-base-content w-full'
-              value={openaiTTSConfig.voices}
-              placeholder={_('Voice ID')}
-              onChange={(event) => updateOpenAITTSConfig({ voices: event.target.value })}
-            />
-          )}
-          {openaiVoicesError && <span className='text-error text-xs'>{openaiVoicesError}</span>}
         </div>
 
         {/* Pre-synthesis look-ahead */}
