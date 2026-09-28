@@ -282,10 +282,10 @@ export class TTSMediaBridge {
   ): Promise<void> {
     let artwork = '';
     try {
-      artwork = await fetchImageAsBase64(meta.coverImageUrl || '/icon.png');
+      artwork = await fetchImageAsBase64(meta.coverImageUrl || '/icon.png', { silent: true });
     } catch {
       try {
-        artwork = await fetchImageAsBase64('/icon.png');
+        artwork = await fetchImageAsBase64('/icon.png', { silent: true });
       } catch {
         // Both the cover and the bundled fallback failed to load. Leave the
         // artwork empty rather than inheriting whatever was there before.

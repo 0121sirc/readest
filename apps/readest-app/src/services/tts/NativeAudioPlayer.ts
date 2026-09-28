@@ -8,7 +8,7 @@
 // all of them behave like any music app.
 //
 // The native side is a dumb player: enqueue/play/pause/rate/position. All
-// orchestration stays here and in EdgeTTSClient — word boundaries and the
+// orchestration stays here and in BufferedTTSClient — word boundaries and the
 // section timeline read the player's media clock, which (like the WebAudio
 // path's rate-1.0 media time) is unaffected by the playback rate because
 // AVPlayer.currentTime reports item time, not wall time.

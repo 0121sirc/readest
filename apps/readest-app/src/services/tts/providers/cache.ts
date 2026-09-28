@@ -8,9 +8,13 @@
 // cache must never be able to break playback.
 
 import { md5 } from 'js-md5';
-import type { TTSWordBoundary } from '@/libs/edgeTTS';
 import type { TTSVoice } from '../types';
-import type { SpeechProvider, SpeechSynthesisRequest, SpeechSynthesisResult } from './types';
+import type {
+  SpeechProvider,
+  SpeechSynthesisRequest,
+  SpeechSynthesisResult,
+  TTSWordBoundary,
+} from './types';
 
 export interface TTSCacheEntry {
   audio: ArrayBuffer;

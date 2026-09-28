@@ -315,7 +315,7 @@ export class BookTTSCacheStore implements TTSCacheStore {
 
   // Push/pull section packs through the selected file-sync provider. The
   // sync module is imported lazily: it must stay out of the TTS module
-  // graph (settingsStore -> constants -> EdgeTTSClient would cycle) and out
+  // graph (settingsStore -> constants -> TTS clients would cycle) and out
   // of sessions that never enable sync.
   #syncPacks(bookHash: string, store: SqliteTTSCacheStore, direction: 'push' | 'pull'): void {
     if (!getTTSCacheConfig().syncEnabled) return;

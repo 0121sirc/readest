@@ -24,7 +24,7 @@
 
 import { md5 } from 'js-md5';
 import type { DatabaseService, DatabaseRow } from '@/types/database';
-import type { TTSWordBoundary } from '@/libs/edgeTTS';
+import type { TTSWordBoundary } from './types';
 import type { TTSCacheEntry, TTSCacheStore } from './cache';
 
 // Pack file IO, rooted at the book's packs directory. Injected because the

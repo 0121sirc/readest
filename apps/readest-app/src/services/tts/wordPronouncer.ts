@@ -1,41 +1,34 @@
-import { AppService } from '@/types/system';
-import { EdgeSpeechTTS, EdgeTTSPayload } from '@/libs/edgeTTS';
-import { isTauriAppPlatform } from '@/services/environment';
-import { isSameLang } from '@/utils/lang';
-import { genSSMLRaw } from '@/utils/ssml';
-import { TTSClient } from './TTSClient';
+import { OpenAISpeechProvider } from './providers/openai';
+import {
+  getOpenAITTSConfig,
+  isOpenAITTSConfigured,
+  parseOpenAIVoices,
+} from './providers/openaiConfig';
 import { TTSUtils } from './TTSUtils';
-import { NativeTTSClient } from './NativeTTSClient';
-import { WebSpeechClient } from './WebSpeechClient';
 import { WebAudioPlayer } from './WebAudioPlayer';
 import type { TTSAudioContext } from './WebAudioPlayer';
 
-// Speaks a single dictionary word as fast as possible. Unlike the reader's
-// TTSController, this never runs EdgeTTSClient.init() (which wastes a round
-// trip synthesizing "test") and never spins up a full speaking session — it
-// calls EdgeSpeechTTS directly (whose static MP3 cache makes repeat words
-// instant) and schedules one chunk on a dedicated Web Audio context. Edge is
-// tried first while online (wss, then the authenticated https proxy); offline
-// requests and Edge failures use the platform speech client. See issue #4876.
+// Speaks a single dictionary word as fast as possible through the configured
+// OpenAI-compatible endpoint. Unlike the reader's TTSController, this never
+// spins up a full speaking session — it synthesizes one utterance and schedules
+// it on a dedicated Web Audio context. When the endpoint is not configured the
+// request reports an error (there is no built-in fallback engine any more).
 
-const EDGE_TTS_NAME = 'edge-tts';
-const DEFAULT_EDGE_VOICE = 'en-US-AriaNeural';
+const OPENAI_TTS_NAME = 'openai-tts';
 
 export type PronounceStatus = 'playing' | 'ended' | 'error';
 
 export interface PronounceWordOptions {
-  appService?: AppService | null;
+  appService?: unknown;
 }
 
-// Choose an Edge voice for a language: the user's preferred Edge voice for that
-// language (as picked in TTS settings) when it exists, else the first voice
-// whose locale matches, else a safe English default.
-export const pickEdgeVoiceId = (lang: string): string => {
-  const preferred = TTSUtils.getPreferredVoice(EDGE_TTS_NAME, lang);
-  const voices = EdgeSpeechTTS.voices;
-  if (preferred && voices.some((v) => v.id === preferred)) return preferred;
-  const match = voices.find((v) => isSameLang(v.lang, lang));
-  return match?.id ?? DEFAULT_EDGE_VOICE;
+// Prefer the user's remembered OpenAI voice for the language, else the first
+// configured voice.
+export const pickOpenAIVoiceId = (lang: string): string => {
+  const voices = parseOpenAIVoices(getOpenAITTSConfig().voices);
+  const preferred = TTSUtils.getPreferredVoice(OPENAI_TTS_NAME, lang);
+  if (preferred && voices.includes(preferred)) return preferred;
+  return voices[0] ?? '';
 };
 
 // A dedicated context, isolated from the reader's shared-context TTS so
@@ -50,24 +43,12 @@ const getPlayer = (): WebAudioPlayer | null => {
   return dedicatedPlayer;
 };
 
-// Reused across calls; EdgeSpeechTTS keeps its MP3/boundary caches on static
-// members, so this just avoids per-call allocation.
-const edgeWss = new EdgeSpeechTTS('wss');
-const edgeHttps = new EdgeSpeechTTS('https');
+const provider = new OpenAISpeechProvider();
 
-// Bumped on every new request so a slower in-flight synth/fetch can detect it
-// has been superseded and bail before touching the player or status.
+// Bumped on every new request so a slower in-flight synthesis can detect it has
+// been superseded and bail before touching the player or status.
 let requestToken = 0;
-let fallbackAbort: AbortController | null = null;
-let fallbackClient: TTSClient | null = null;
-
-const stopFallback = (): void => {
-  fallbackAbort?.abort();
-  fallbackAbort = null;
-  const client = fallbackClient;
-  fallbackClient = null;
-  if (client) void client.shutdown().catch(() => {});
-};
+let abortController: AbortController | null = null;
 
 // Warm (create + resume) the dedicated audio context. MUST be called
 // synchronously from the click handler: pronounceWord resumes the context only
@@ -80,67 +61,15 @@ export const warmWordAudio = (): void => {
 
 export const cancelWordPronounce = (): void => {
   requestToken++;
+  abortController?.abort();
+  abortController = null;
   getPlayer()?.abortSession();
-  stopFallback();
-};
-
-// Edge audio bytes: direct wss first; on failure the authenticated https proxy
-// (the reader's own fallback for browsers that block Bing). The proxy throws
-// "Not authenticated" when logged out, which propagates to the speech fallback.
-// On Tauri the native wss transport is the only Edge path — never retry via
-// the proxy (a cross-origin /api/tts/edge request, e.g. fired when offline).
-const fetchEdgeAudio = async (payload: EdgeTTSPayload): Promise<ArrayBuffer> => {
-  try {
-    return (await edgeWss.createAudioData(payload)).data;
-  } catch (err) {
-    if (isTauriAppPlatform()) throw err;
-    return (await edgeHttps.createAudioData(payload)).data;
-  }
-};
-
-const speakViaFallback = async (
-  word: string,
-  lang: string,
-  options: PronounceWordOptions,
-  token: number,
-  emit: (status: PronounceStatus) => void,
-): Promise<void> => {
-  // Web Speech is the reader's built-in engine on desktop/web; on the mobile
-  // app the native TTS plugin is what actually produces audio.
-  const client: TTSClient = options.appService?.isMobile
-    ? new NativeTTSClient()
-    : new WebSpeechClient();
-  fallbackClient = client;
-  const controller = new AbortController();
-  fallbackAbort = controller;
-  try {
-    const ready = await client.init();
-    if (!ready || token !== requestToken) {
-      emit('error');
-      return;
-    }
-    client.setPrimaryLang(lang);
-    emit('playing');
-    for await (const ev of client.speak(genSSMLRaw(word), controller.signal)) {
-      if (ev.code === 'error') {
-        emit('error');
-        return;
-      }
-    }
-    emit('ended');
-  } catch {
-    emit('error');
-  } finally {
-    if (fallbackClient === client) fallbackClient = null;
-    if (fallbackAbort === controller) fallbackAbort = null;
-    void client.shutdown().catch(() => {});
-  }
 };
 
 export const pronounceWord = async (
   word: string,
   lang: string | undefined,
-  options: PronounceWordOptions,
+  _options: PronounceWordOptions,
   onStatus?: (status: PronounceStatus) => void,
 ): Promise<void> => {
   const token = ++requestToken;
@@ -153,41 +82,47 @@ export const pronounceWord = async (
     emit('ended');
     return;
   }
-  const voiceLang = lang && lang.length ? lang : 'en';
 
-  // Stop whatever is currently playing (Edge session or fallback client).
+  // Stop whatever is currently playing.
   getPlayer()?.abortSession();
-  stopFallback();
+  abortController?.abort();
 
   const player = getPlayer();
-  const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
-  if (player && !isOffline) {
-    try {
-      const voice = pickEdgeVoiceId(voiceLang);
-      const data = await fetchEdgeAudio({
-        lang: voiceLang,
-        text: trimmed,
-        voice,
-        rate: 1.0,
-        pitch: 1.0,
-      });
-      if (token !== requestToken) return;
-      const buffer = await player.decode(data);
-      if (token !== requestToken) return;
-      const generation = player.startSession((event) => {
-        if (event.type === 'session-end') emit('ended');
-        else if (event.type === 'context-error') emit('error');
-      });
-      player.scheduleChunk(generation, buffer, { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
-      player.endSession(generation);
-      emit('playing');
-      return;
-    } catch (err) {
-      if (token !== requestToken) return;
-      console.warn('[dict-tts] Edge pronunciation failed, falling back', err);
-    }
+  if (!player || !isOpenAITTSConfigured()) {
+    emit('error');
+    return;
   }
 
-  if (token !== requestToken) return;
-  await speakViaFallback(trimmed, voiceLang, options, token, emit);
+  const voiceLang = lang && lang.length ? lang : 'en';
+  const voice = pickOpenAIVoiceId(voiceLang);
+  if (!voice) {
+    emit('error');
+    return;
+  }
+
+  const controller = new AbortController();
+  abortController = controller;
+  try {
+    const { audio } = await provider.synthesize(
+      { lang: voiceLang, text: trimmed, voice, pitch: 1.0 },
+      controller.signal,
+    );
+    if (token !== requestToken) return;
+    const buffer = await player.decode(audio);
+    if (token !== requestToken) return;
+    const generation = player.startSession((event) => {
+      if (event.type === 'session-end') emit('ended');
+      else if (event.type === 'context-error') emit('error');
+    });
+    player.scheduleChunk(generation, buffer, { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
+    player.endSession(generation);
+    emit('playing');
+  } catch (err) {
+    if (token === requestToken) {
+      console.warn('[dict-tts] pronunciation failed', err);
+      emit('error');
+    }
+  } finally {
+    if (abortController === controller) abortController = null;
+  }
 };

@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { PiArrowsClockwise, PiSpinner } from 'react-icons/pi';
+import { MdCheck } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useReaderStore } from '@/store/readerStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -6,6 +8,8 @@ import { useResetViewSettings } from '@/hooks/useResetSettings';
 import { useTranslation } from '@/hooks/useTranslation';
 import { saveViewSettings } from '@/helpers/settings';
 import { getLocale } from '@/utils/misc';
+import { eventDispatcher } from '@/utils/event';
+import { getAPIBaseUrl } from '@/services/environment';
 import { SettingsPanelPanelProp } from './SettingsDialog';
 import {
   TTSHighlightGranularity,
@@ -13,7 +17,21 @@ import {
   TTSPlayerStyle,
 } from '@/services/tts/types';
 import { getTTSCacheConfig, setTTSCacheConfig } from '@/services/tts/providers/bookCacheStore';
-import { BoxedList, SettingsRow, SettingsSelect, SettingsSwitchRow } from './primitives';
+import {
+  getOpenAITTSConfig,
+  OPENAI_TTS_MAX_LOOKAHEAD,
+  OPENAI_TTS_MIN_LOOKAHEAD,
+  OpenAITTSConfig,
+  parseOpenAIVoices,
+  setOpenAITTSConfig,
+} from '@/services/tts/providers/openaiConfig';
+import {
+  BoxedList,
+  SettingLabel,
+  SettingsRow,
+  SettingsSelect,
+  SettingsSwitchRow,
+} from './primitives';
 import TTSHighlightStyleEditor, { TTSHighlightStyle } from './theme/TTSHighlightStyleEditor';
 
 const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
@@ -47,11 +65,130 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
   );
 
   const [ttsCacheConfig, setTtsCacheConfigState] = useState(getTTSCacheConfig());
+  const [openaiTTSConfig, setOpenaiTTSConfigState] = useState<OpenAITTSConfig>(
+    getOpenAITTSConfig(),
+  );
+  const [openaiVoices, setOpenaiVoices] = useState<{ id: string; desc?: string }[]>([]);
+  const [openaiVoicesFetching, setOpenaiVoicesFetching] = useState(false);
+  const [openaiVoicesError, setOpenaiVoicesError] = useState('');
+  const [openaiTesting, setOpenaiTesting] = useState(false);
 
   const updateTTSCacheConfig = (config: typeof ttsCacheConfig) => {
     setTtsCacheConfigState(config);
     setTTSCacheConfig(config);
   };
+
+  const updateOpenAITTSConfig = (patch: Partial<OpenAITTSConfig>) => {
+    const next = { ...openaiTTSConfig, ...patch };
+    setOpenaiTTSConfigState(next);
+    setOpenAITTSConfig(next);
+  };
+
+  const showToast = useCallback(
+    (type: 'info' | 'error', message: string) => {
+      eventDispatcher.dispatch('toast', { type, message });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // Fetch the endpoint's voice list (server-side via our proxy, so CORS never
+  // applies) and adopt all of them for the reader's voice picker.
+  const fetchOpenAIVoices = useCallback(async () => {
+    if (!openaiTTSConfig.baseUrl.trim() || openaiVoicesFetching) return;
+    setOpenaiVoicesFetching(true);
+    setOpenaiVoicesError('');
+    try {
+      const res = await fetch(`${getAPIBaseUrl()}/tts/openai/voices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: openaiTTSConfig.baseUrl,
+          apiKey: openaiTTSConfig.apiKey,
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        setOpenaiVoicesError(
+          _('Failed to fetch voices ({{status}})', { status: res.status }) +
+            (detail ? `: ${detail.slice(0, 120)}` : ''),
+        );
+        return;
+      }
+      const data = (await res.json()) as { voices?: { id: string; desc?: string }[] };
+      const voices = data.voices ?? [];
+      setOpenaiVoices(voices);
+      if (voices.length > 0) {
+        // Keep the current pick when it is still offered; otherwise default to
+        // the first voice.
+        const current = parseOpenAIVoices(openaiTTSConfig.voices)[0];
+        if (!current || !voices.some((v) => v.id === current)) {
+          updateOpenAITTSConfig({ voices: voices[0]!.id });
+        }
+      }
+    } catch (error) {
+      setOpenaiVoicesError(
+        `${_('Failed to fetch voices')}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setOpenaiVoicesFetching(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    openaiTTSConfig.baseUrl,
+    openaiTTSConfig.apiKey,
+    openaiTTSConfig.voices,
+    openaiVoicesFetching,
+  ]);
+
+  const selectOpenAIVoice = (id: string) => {
+    updateOpenAITTSConfig({ voices: id });
+  };
+
+  // Synthesize and play a short sample so the user can hear the configured
+  // endpoint and voice before reading a book.
+  const testOpenAITTS = useCallback(async () => {
+    if (!openaiTTSConfig.baseUrl.trim() || openaiTesting) return;
+    const voice = parseOpenAIVoices(openaiTTSConfig.voices)[0] || openaiVoices[0]?.id || '';
+    setOpenaiTesting(true);
+    try {
+      const res = await fetch(`${getAPIBaseUrl()}/tts/openai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: openaiTTSConfig.baseUrl,
+          apiKey: openaiTTSConfig.apiKey,
+          model: openaiTTSConfig.model,
+          input: 'Hello, this is a test of the text to speech engine.',
+          voice,
+          responseFormat: 'mp3',
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        showToast(
+          'error',
+          _('TTS test failed ({{status}})', { status: res.status }) +
+            (detail ? `: ${detail.slice(0, 160)}` : ''),
+        );
+        return;
+      }
+      const buffer = await res.arrayBuffer();
+      const url = URL.createObjectURL(new Blob([buffer], { type: 'audio/mpeg' }));
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play().catch(() => {});
+      showToast('info', _('TTS test succeeded'));
+    } catch (error) {
+      showToast(
+        'error',
+        `${_('TTS test failed')}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setOpenaiTesting(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openaiTTSConfig, openaiVoices, openaiTesting]);
 
   const resetToDefaults = useResetViewSettings();
 
@@ -234,6 +371,135 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
               { value: '500', label: '500 MB' },
               { value: '1024', label: '1 GB' },
             ]}
+          />
+        </SettingsRow>
+      </BoxedList>
+
+      <BoxedList title={_('Custom OpenAI TTS')} data-setting-id='settings.tts.openai'>
+        {/* Base URL + Test */}
+        <div className='flex flex-col gap-2 py-3 pe-4'>
+          <div className='flex w-full items-center justify-between'>
+            <SettingLabel>{_('Base URL')}</SettingLabel>
+            <button
+              type='button'
+              className='btn btn-xs btn-contrast eink-bordered inline-flex items-center gap-1'
+              onClick={testOpenAITTS}
+              disabled={openaiTesting || !openaiTTSConfig.baseUrl.trim()}
+            >
+              {openaiTesting && <PiSpinner className='size-3.5 animate-spin' />}
+              {_('Test')}
+            </button>
+          </div>
+          <input
+            type='url'
+            className='input input-sm bg-base-100 text-base-content w-full'
+            value={openaiTTSConfig.baseUrl}
+            placeholder='https://api.openai.com/v1'
+            onChange={(event) => updateOpenAITTSConfig({ baseUrl: event.target.value })}
+          />
+        </div>
+
+        {/* API key */}
+        <div className='flex flex-col gap-2 py-3 pe-4'>
+          <SettingLabel>{_('API Key')}</SettingLabel>
+          <input
+            type='password'
+            autoComplete='off'
+            className='input input-sm bg-base-100 text-base-content w-full'
+            value={openaiTTSConfig.apiKey}
+            placeholder={_('Optional')}
+            onChange={(event) => updateOpenAITTSConfig({ apiKey: event.target.value })}
+          />
+        </div>
+
+        {/* Model */}
+        <div className='flex flex-col gap-2 py-3 pe-4'>
+          <SettingLabel>{_('Model')}</SettingLabel>
+          <input
+            type='text'
+            className='input input-sm bg-base-100 text-base-content w-full'
+            value={openaiTTSConfig.model}
+            placeholder={_('Optional')}
+            onChange={(event) => updateOpenAITTSConfig({ model: event.target.value })}
+          />
+        </div>
+
+        {/* Voices: fetched from the endpoint, then all used for the picker */}
+        <div className='flex flex-col gap-2 py-3 pe-4'>
+          <div className='flex w-full items-center justify-between'>
+            <SettingLabel>{_('Voices')}</SettingLabel>
+            <button
+              type='button'
+              className='hover:bg-base-200 inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150'
+              onClick={fetchOpenAIVoices}
+              disabled={openaiVoicesFetching || !openaiTTSConfig.baseUrl.trim()}
+              title={_('Refresh Voices')}
+              aria-label={_('Refresh Voices')}
+            >
+              {openaiVoicesFetching ? (
+                <PiSpinner className='size-4 animate-spin' />
+              ) : (
+                <PiArrowsClockwise className='size-4' />
+              )}
+            </button>
+          </div>
+          {openaiVoices.length > 0 ? (
+            <div className='flex flex-col'>
+              {openaiVoices.map((voice) => {
+                const selected = parseOpenAIVoices(openaiTTSConfig.voices)[0] === voice.id;
+                return (
+                  <button
+                    key={voice.id}
+                    type='button'
+                    onClick={() => selectOpenAIVoice(voice.id)}
+                    className='hover:bg-base-200/60 flex w-full items-center gap-2 rounded-lg px-1 py-2 text-start'
+                  >
+                    <span className='flex h-6 w-6 shrink-0 items-center justify-center'>
+                      {selected && <MdCheck className='text-base-content' />}
+                    </span>
+                    <span className='flex min-w-0 flex-col'>
+                      <span className='text-sm'>{voice.id}</span>
+                      {voice.desc && (
+                        <span className='text-base-content/60 line-clamp-1 text-xs'>
+                          {voice.desc}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            // Fallback for servers without a voices endpoint: type one id here.
+            <input
+              type='text'
+              className='input input-sm bg-base-100 text-base-content w-full'
+              value={openaiTTSConfig.voices}
+              placeholder={_('Voice ID')}
+              onChange={(event) => updateOpenAITTSConfig({ voices: event.target.value })}
+            />
+          )}
+          {openaiVoicesError && <span className='text-error text-xs'>{openaiVoicesError}</span>}
+        </div>
+
+        {/* Pre-synthesis look-ahead */}
+        <SettingsRow
+          label={_('Pre-synthesis Look-ahead')}
+          description={_(
+            'Sentences synthesized ahead of playback; higher is smoother on slow servers',
+          )}
+        >
+          <SettingsSelect
+            value={String(openaiTTSConfig.lookahead)}
+            onChange={(event) => updateOpenAITTSConfig({ lookahead: Number(event.target.value) })}
+            ariaLabel={_('Pre-synthesis Look-ahead')}
+            options={Array.from(
+              { length: OPENAI_TTS_MAX_LOOKAHEAD - OPENAI_TTS_MIN_LOOKAHEAD + 1 },
+              (_, i) => {
+                const value = OPENAI_TTS_MIN_LOOKAHEAD + i;
+                return { value: String(value), label: String(value) };
+              },
+            )}
           />
         </SettingsRow>
       </BoxedList>

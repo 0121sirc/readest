@@ -3,11 +3,10 @@ import { isTauriAppPlatform } from '@/services/environment';
 import { isSameLang } from '@/utils/lang';
 import { NativeAudioPlayer } from './NativeAudioPlayer';
 import { TTSClient, TTSCapabilities, TTSMessageEvent } from './TTSClient';
-import { TTSWordBoundary } from '@/libs/edgeTTS';
 import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
 import { AppService } from '@/types/system';
 import { parseSSMLMarks } from '@/utils/ssml';
-import { DEFAULT_PARAGRAPH_GAP_SEC, TTSController } from './TTSController';
+import type { TTSController } from './TTSController';
 import { TTSUtils } from './TTSUtils';
 import { findBoundaryIndexAtTime } from './wordHighlight';
 import { applyEdgeFade, findSpeechBounds } from './pcm';
@@ -22,6 +21,7 @@ import {
   SpeechProvider,
   SpeechSynthesisPermanentError,
   SpeechSynthesisRequest,
+  TTSWordBoundary,
 } from './providers/types';
 import { TTSAudioBuffer, WebAudioPlayer, WebAudioPlayerEvent } from './WebAudioPlayer';
 
@@ -38,14 +38,11 @@ import { TTSAudioBuffer, WebAudioPlayer, WebAudioPlayerEvent } from './WebAudioP
 // the screen off), not when it is fetched — schedule-ahead would otherwise
 // run foliate's mark cursor ahead of the voice and break prev/next/resume.
 
-// Natural pause between sentences at 1.0x, replacing the silence Edge bakes
-// into every utterance: measured at ~0.18s leading and ~0.8s trailing, so ~1s
-// of dead air per sentence if it is played as-is (see #5414). The rate scaling
-// happens once, before the value reaches this client (see scaleGapForRate);
-// what arrives here is wall-clock seconds of silence. Note the native path only
-// cuts the trailing silence, so its audible gap also carries the next
-// utterance's ~0.18s of leading silence.
-export const DEFAULT_SENTENCE_GAP_SEC = 0.15;
+// Sentence and paragraph gaps live in the dependency-free ./gaps module and
+// are re-exported here for the existing importers.
+import { DEFAULT_PARAGRAPH_GAP_SEC, DEFAULT_SENTENCE_GAP_SEC } from './gaps';
+export { DEFAULT_PARAGRAPH_GAP_SEC, DEFAULT_SENTENCE_GAP_SEC };
+
 const TICKS_PER_SECOND = 10_000_000;
 
 // How many consecutive unreachable sentences (offline with nothing cached, or
@@ -348,6 +345,13 @@ export class BufferedTTSClient implements TTSClient {
   // Detached scheduler: fetches, prepares, and schedules chunks ahead of the
   // playhead under the player's backpressure. Never throws; failures surface
   // through the event queue.
+  //
+  // Synthesis runs in a sliding window of `getPrefetchDepth()` marks: while the
+  // current chunk is being decoded/scheduled (and then played), the next marks
+  // are already being synthesized concurrently. Self-hosted endpoints can take
+  // seconds per request, so a sequential loop left audible gaps between
+  // sentences; the provider's in-memory cache keeps this from duplicating work
+  // already done by the controller's preload.
   async #runScheduler(
     marks: TTSMark[],
     signal: AbortSignal,
@@ -356,26 +360,61 @@ export class BufferedTTSClient implements TTSClient {
     chunkMeta: ChunkMeta[],
   ): Promise<void> {
     const rate = this.#rate;
-    try {
-      for (const mark of marks) {
-        if (signal.aborted || this.#activeGeneration !== generation) return;
-        // Voices resolve per mark: mixed-language sections speak (and record
-        // durations under) the voice actually used for each sentence.
-        const voiceId = await this.getVoiceIdFromLang(mark.language);
-        this.#speakingLang = mark.language;
-        this.#currentVoiceId = voiceId;
+    const depth = Math.max(1, Math.floor(this.getPrefetchDepth()));
 
-        const req: SpeechSynthesisRequest = {
-          lang: mark.language,
-          text: mark.text,
-          voice: voiceId,
-          pitch: this.#pitch,
-        };
-        let audio: { data: ArrayBuffer; boundaries: TTSWordBoundary[] } | undefined;
-        try {
-          audio = await this.#synthesizeWithRetry(mark.language, mark.text, voiceId, signal);
-        } catch (error) {
-          if (error instanceof SpeechSynthesisPermanentError) {
+    type SynthResult =
+      | {
+          kind: 'ok';
+          mark: TTSMark;
+          voiceId: string;
+          audio: { data: ArrayBuffer; boundaries: TTSWordBoundary[] };
+        }
+      | { kind: 'error'; mark: TTSMark; error: unknown };
+
+    const pending = new Map<number, Promise<SynthResult>>();
+    const startSynthesis = (i: number) => {
+      if (i >= marks.length || pending.has(i)) return;
+      const mark = marks[i]!;
+      pending.set(
+        i,
+        (async (): Promise<SynthResult> => {
+          try {
+            // Voices resolve per mark: mixed-language sections speak (and
+            // record durations under) the voice actually used for each
+            // sentence.
+            const voiceId = await this.getVoiceIdFromLang(mark.language);
+            const audio = await this.#synthesizeWithRetry(
+              mark.language,
+              mark.text,
+              voiceId,
+              signal,
+            );
+            if (!audio) {
+              return { kind: 'error', mark, error: new DOMException('Aborted', 'AbortError') };
+            }
+            return { kind: 'ok', mark, voiceId, audio };
+          } catch (error) {
+            return { kind: 'error', mark, error };
+          }
+        })(),
+      );
+    };
+
+    try {
+      for (let i = 0; i < Math.min(depth, marks.length); i++) startSynthesis(i);
+
+      for (let i = 0; i < marks.length; i++) {
+        if (signal.aborted || this.#activeGeneration !== generation) return;
+        const result = await pending.get(i)!;
+        pending.delete(i);
+        // Top the window back up as soon as the head is consumed, so the next
+        // chunks synthesize while this one is decoded and played.
+        startSynthesis(i + depth);
+        if (signal.aborted || this.#activeGeneration !== generation) return;
+
+        const mark = result.mark;
+        if (result.kind === 'error') {
+          if (result.error instanceof SpeechSynthesisPermanentError) {
             // Genuinely unsynthesizable sentence (server returned no audio):
             // skip it and keep going — a few bad sentences must not stop a
             // chapter. These don't count toward the offline stop budget.
@@ -389,7 +428,8 @@ export class BufferedTTSClient implements TTSClient {
           // uncached must not stop on the heading), but stop after a RUN of
           // unreachable sentences rather than silently skipping to the end of
           // the book. A later cached hit resets the budget below.
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            result.error instanceof Error ? result.error.message : String(result.error);
           this.#consecutiveSkips += 1;
           if (this.#consecutiveSkips > MAX_CONSECUTIVE_SKIPS) {
             console.warn('TTS stopping after consecutive unreachable sentences:', message);
@@ -400,9 +440,19 @@ export class BufferedTTSClient implements TTSClient {
           queue.push({ kind: 'chunk-skip', markName: mark.name });
           continue;
         }
-        if (!audio || signal.aborted || this.#activeGeneration !== generation) return;
+
+        const { voiceId, audio } = result;
+        this.#speakingLang = mark.language;
+        this.#currentVoiceId = voiceId;
         this.#consecutiveSkips = 0;
         this.#recordDurations(voiceId, mark.text, audio.boundaries);
+
+        const req: SpeechSynthesisRequest = {
+          lang: mark.language,
+          text: mark.text,
+          voice: voiceId,
+          pitch: this.#pitch,
+        };
 
         if (this.#player instanceof NativeAudioPlayer) {
           // Native playout: no decode/WSOLA here — the raw MP3 goes to the
@@ -477,6 +527,13 @@ export class BufferedTTSClient implements TTSClient {
       const message = error instanceof Error ? error.message : String(error);
       queue.push({ kind: 'error', message });
     }
+  }
+
+  // How many sentences to synthesize ahead of playback. Buffered engines that
+  // talk to a slow endpoint override this from their own settings; 1 keeps the
+  // original strictly-sequential behaviour.
+  protected getPrefetchDepth(): number {
+    return 1;
   }
 
   async #prepareChunkBuffer(

@@ -242,9 +242,13 @@ export async function fetchImageAsBase64(
     targetWidth?: number;
     format?: 'image/jpeg' | 'image/png' | 'image/webp';
     quality?: number;
+    // Callers that treat a failed fetch as an expected, recoverable case (e.g.
+    // a book without an extracted cover) can silence the console error while
+    // still receiving the rejection.
+    silent?: boolean;
   } = {},
 ): Promise<string> {
-  const { targetWidth = 256, format = 'image/jpeg', quality = 0.85 } = options;
+  const { targetWidth = 256, format = 'image/jpeg', quality = 0.85, silent = false } = options;
 
   try {
     const response = await fetch(url);
@@ -306,7 +310,7 @@ export async function fetchImageAsBase64(
       };
     });
   } catch (error) {
-    console.error('Error fetching and encoding image:', error);
+    if (!silent) console.error('Error fetching and encoding image:', error);
     throw error;
   }
 }

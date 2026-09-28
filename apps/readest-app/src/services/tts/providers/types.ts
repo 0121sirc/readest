@@ -13,8 +13,18 @@
 //   verbatim text spans); providers convert at their edge. Absent boundaries
 //   simply degrade word highlighting to sentence highlighting.
 
-import type { TTSWordBoundary } from '@/libs/edgeTTS';
 import type { TTSVoice } from '../types';
+
+// Word-boundary timing emitted alongside synthesized audio. Offsets and
+// durations are in 100-nanosecond ticks relative to the start of the audio
+// stream; `text` is the verbatim span of the input text. Providers that have no
+// boundary metadata simply return an empty list (word highlighting degrades to
+// sentence highlighting).
+export interface TTSWordBoundary {
+  offset: number;
+  duration: number;
+  text: string;
+}
 
 export interface SpeechSynthesisRequest {
   lang: string;

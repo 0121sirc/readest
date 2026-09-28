@@ -271,10 +271,7 @@ describe('Annotator popup shortcuts', () => {
   });
 
   // #5011: Ctrl/Cmd+R is documented as "Readest reads the selection and stops",
-  // but the handler called handleSpeakText() without an argument, so `oneTime`
-  // fell back to false. useTTSControl then took the startFromRange branch,
-  // which begins at the top of the containing block and carries on through the
-  // book -- reading from the start of the paragraph and past the selection.
+  // so the handler must set the one-shot `oneTime` flag.
   test('onReadAloudSelection speaks only the selection', async () => {
     render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
     await selectMainViewText();
