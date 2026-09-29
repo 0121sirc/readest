@@ -21,6 +21,7 @@ import { useMedianPageDurationsSecs } from '@/hooks/useMedianPageDurationSecs';
 import { useBookshelfDate } from '@/hooks/useBookshelfDate';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { navigateToLibrary, navigateToReader, showReaderWindow } from '@/utils/nav';
+import { isReadestAccountHidden } from '@/utils/access';
 import {
   createBookFilter,
   createBookSorter,
@@ -714,6 +715,8 @@ const Bookshelf: React.FC<BookshelfProps> = ({
 
   useEffect(() => {
     const handleShareIntent = (event: CustomEvent) => {
+      // Sharing needs a Readest account; local-first mode has none.
+      if (isReadestAccountHidden()) return;
       const book = (event.detail as { book?: Book } | undefined)?.book;
       if (!book) return;
       if (!user) {

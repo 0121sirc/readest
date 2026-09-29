@@ -1,6 +1,6 @@
 import type { SystemSettings } from '@/types/settings';
 import type { UserPlan } from '@/types/quota';
-import { isCloudSyncAllowed } from '@/utils/access';
+import { isCloudSyncAllowed, isReadestAccountHidden } from '@/utils/access';
 import type { FileSyncBackendKind } from '@/services/sync/file/providerRegistry';
 
 /**
@@ -67,8 +67,13 @@ export const hasAnyThirdPartyEnabled = (settings: SystemSettings | null | undefi
  * Cloud. Once the user touches a Cloud Sync checkbox the flag is explicit and
  * wins.
  */
-export const isReadestCloudEnabled = (settings: SystemSettings | null | undefined): boolean =>
-  settings?.readestCloud?.enabled ?? !hasAnyThirdPartyEnabled(settings);
+export const isReadestCloudEnabled = (settings: SystemSettings | null | undefined): boolean => {
+  // Local-first deployments never use the official cloud, whatever the stored
+  // flag says: gating every native channel here keeps Readest Cloud out of the
+  // sync graph without touching the replica code.
+  if (isReadestAccountHidden()) return false;
+  return settings?.readestCloud?.enabled ?? !hasAnyThirdPartyEnabled(settings);
+};
 
 /** Every provider syncing the library on this device, Readest Cloud first. */
 export const getCloudSyncProviders = (

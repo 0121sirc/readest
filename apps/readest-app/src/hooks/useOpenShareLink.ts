@@ -7,6 +7,7 @@ import { isTauriAppPlatform } from '@/services/environment';
 import { eventDispatcher } from '@/utils/event';
 import { useAuth } from '@/context/AuthContext';
 import { navigateToReader } from '@/utils/nav';
+import { isReadestAccountHidden } from '@/utils/access';
 import { ShareApiError, confirmDownload, importShare } from '@/libs/share';
 import { ensureSharedBookLocal } from '@/libs/shareImport';
 import { parseShareDeepLink, type ShareDeepLink } from '@/utils/share';
@@ -52,6 +53,8 @@ export function useOpenShareLink() {
 
   const handleShareLink = useCallback(
     async ({ token }: ShareDeepLink) => {
+      // Sharing needs a Readest account; local-first mode ignores deep links.
+      if (isReadestAccountHidden()) return;
       if (!user) {
         eventDispatcher.dispatch('toast', {
           type: 'info',

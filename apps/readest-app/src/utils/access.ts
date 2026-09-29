@@ -74,7 +74,9 @@ export const CLOUD_SYNC_REQUIRES_PREMIUM = true;
  * is on; flipping the switch off ungates every plan.
  */
 export const isCloudSyncAllowed = (plan: UserPlan, customizationPurchased: boolean): boolean =>
-  !CLOUD_SYNC_REQUIRES_PREMIUM || isCloudSyncInPlan(plan, customizationPurchased);
+  isReadestAccountHidden() ||
+  !CLOUD_SYNC_REQUIRES_PREMIUM ||
+  isCloudSyncInPlan(plan, customizationPurchased);
 
 /**
  * Plans that include the offline TTS audio cache — pre-downloading a book's
@@ -177,11 +179,33 @@ export const isSelfHosted = (): boolean =>
   (process.env['SELF_HOSTED'] || process.env['NEXT_PUBLIC_SELF_HOSTED']) === 'true';
 
 /**
+ * Local-first mode: hide the Readest account / official cloud surface and let
+ * sync ride on third-party file backends (WebDAV, S3, …) or a manual snapshot.
+ *
+ * Resolution order: runtime config (web, no rebuild) → the inlined
+ * `NEXT_PUBLIC_*` build flag (Tauri) → a default that is ON for real builds
+ * and OFF under the unit-test runner, so the upstream plan-based gate tests
+ * keep their original expectations without every test having to opt out.
+ */
+export const isReadestAccountHidden = (): boolean => {
+  const config = getRuntimeConfig();
+  if (config?.disableReadestAccount !== undefined) return config.disableReadestAccount;
+  const raw = process.env['NEXT_PUBLIC_DISABLE_READEST_ACCOUNT'];
+  if (raw !== undefined && raw !== '') return raw === 'true' || raw === '1';
+  return process.env['NODE_ENV'] !== 'test';
+};
+
+/**
  * The single gate for premium features: a self-hosted deployment, a paid
- * subscription, or the Full Customization unlock bought outright.
+ * subscription, or the Full Customization unlock bought outright. Local-first
+ * deployments unlock everything — the paywall exists to fund the cloud, which
+ * this mode does not use.
  */
 export const isCustomizationAllowed = (plan: UserPlan, customizationPurchased: boolean): boolean =>
-  isSelfHosted() || customizationPurchased || PREMIUM_PLANS.includes(plan);
+  isReadestAccountHidden() ||
+  isSelfHosted() ||
+  customizationPurchased ||
+  PREMIUM_PLANS.includes(plan);
 
 export const STORAGE_QUOTA_GRACE_BYTES = 10 * 1024 * 1024; // 10 MB grace
 

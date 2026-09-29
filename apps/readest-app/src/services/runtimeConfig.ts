@@ -7,6 +7,12 @@ export interface ReadestRuntimeConfig {
   translationFixedQuota?: number;
   fontBaseUrl?: string;
   selfHosted?: boolean;
+  /**
+   * Hide the Readest account / official cloud surface and make library sync
+   * rely on third-party file backends (WebDAV, S3, …) or a manual snapshot
+   * instead. See `isReadestAccountHidden`.
+   */
+  disableReadestAccount?: boolean;
 }
 
 declare global {
@@ -39,6 +45,15 @@ export const getServerRuntimeConfig = (): ReadestRuntimeConfig => ({
   // funds.
   selfHosted:
     (process.env['SELF_HOSTED'] || process.env['NEXT_PUBLIC_SELF_HOSTED']) === 'true' || undefined,
+  // Local-first deployments hide the Readest account / cloud UI and run sync
+  // off third-party file backends instead. `||` (not `??`) so an explicitly
+  // blank value falls through to the NEXT_PUBLIC_* fallback.
+  disableReadestAccount: (() => {
+    const raw =
+      process.env['DISABLE_READEST_ACCOUNT'] || process.env['NEXT_PUBLIC_DISABLE_READEST_ACCOUNT'];
+    if (raw === undefined || raw === '') return undefined;
+    return raw === 'true' || raw === '1';
+  })(),
   storageFixedQuota: (() => {
     const raw =
       process.env['STORAGE_FIXED_QUOTA'] ?? process.env['NEXT_PUBLIC_STORAGE_FIXED_QUOTA'];

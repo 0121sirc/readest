@@ -32,7 +32,7 @@ import { useFileSyncStore } from '@/store/fileSyncStore';
 import { useLocalSendStore } from '@/store/localsendStore';
 import { CatalogManager } from '@/app/opds/components/CatalogManager';
 import { saveSysSettings } from '@/helpers/settings';
-import { isCloudSyncAllowed } from '@/utils/access';
+import { isCloudSyncAllowed, isReadestAccountHidden } from '@/utils/access';
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { getLocalSendAlias, isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import { getGoogleWebClientId } from '@/services/sync/providers/gdrive/buildGoogleDriveProvider';
@@ -143,6 +143,9 @@ const IntegrationsPanel: React.FC = () => {
   // back on. The `?? 'free'` keeps the (re-gated) loading state non-premium.
   const { userProfilePlan, customizationPurchased } = useQuotaStats();
   const isCloudSyncPremium = isCloudSyncAllowed(userProfilePlan ?? 'free', customizationPurchased);
+  // Local-first mode hides the official cloud / account-bound integrations and
+  // leaves only the third-party file backends.
+  const hideAccount = isReadestAccountHidden();
   const premiumBadge = shouldShowCloudProviderBadge({
     signedIn: !!user,
     planLoading: userProfilePlan === undefined,
@@ -647,16 +650,18 @@ const IntegrationsPanel: React.FC = () => {
             role='group'
             aria-label={_('Cloud sync providers')}
           >
-            <CloudProviderRow
-              icon={RiCloudFill}
-              title={_('Readest Cloud')}
-              status={readestStatus}
-              checked={!!user && readestEnabled}
-              canToggle={!!user}
-              onToggle={(next) => toggleCloudProvider('readest', next)}
-              onOpen={() => (user ? setSubPage('readest-cloud') : navigateToLogin(router))}
-              toggleLabel={_('Sync with Readest Cloud')}
-            />
+            {!hideAccount && (
+              <CloudProviderRow
+                icon={RiCloudFill}
+                title={_('Readest Cloud')}
+                status={readestStatus}
+                checked={!!user && readestEnabled}
+                canToggle={!!user}
+                onToggle={(next) => toggleCloudProvider('readest', next)}
+                onOpen={() => (user ? setSubPage('readest-cloud') : navigateToLogin(router))}
+                toggleLabel={_('Sync with Readest Cloud')}
+              />
+            )}
             {/* Third-party providers are premium: every row carries the tier
                 badge; on a free plan the checkbox is disabled and opening a
                 row routes to the upgrade page instead of the config sub-page. */}
@@ -765,11 +770,13 @@ const IntegrationsPanel: React.FC = () => {
                   'Library sync is off. Your books, progress, and annotations stay on this device.',
                 )}
               </li>
-              <li>
-                {_(
-                  'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
-                )}
-              </li>
+              {!hideAccount && (
+                <li>
+                  {_(
+                    'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
+                  )}
+                </li>
+              )}
             </Tips>
           </div>
         )}
@@ -791,12 +798,14 @@ const IntegrationsPanel: React.FC = () => {
               status={absStatus}
               onClick={() => setSubPage('audiobookshelf')}
             />
-            <IntegrationRow
-              icon={RiSendPlaneLine}
-              title={_('Send to Readest')}
-              status={_('Email books to your library')}
-              onClick={() => setSubPage('send')}
-            />
+            {!hideAccount && (
+              <IntegrationRow
+                icon={RiSendPlaneLine}
+                title={_('Send to Readest')}
+                status={_('Email books to your library')}
+                onClick={() => setSubPage('send')}
+              />
+            )}
             {isTauriAppPlatform() && (
               <IntegrationRow
                 icon={RiWifiLine}
@@ -809,7 +818,7 @@ const IntegrationsPanel: React.FC = () => {
         </div>
       </div>
 
-      {appService?.isDesktopApp && (
+      {!hideAccount && appService?.isDesktopApp && (
         <div className='w-full' data-setting-id='settings.integrations.discord'>
           <SectionTitle className='mb-2'>{_('Discord')}</SectionTitle>
           <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>

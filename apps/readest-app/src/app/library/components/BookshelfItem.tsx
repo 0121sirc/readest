@@ -20,6 +20,7 @@ import {
   type BookContextMenuItemId,
 } from '@/app/library/utils/libraryUtils';
 import { isTauriAppPlatform } from '@/services/environment';
+import { isReadestAccountHidden } from '@/utils/access';
 import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import BookItem from './BookItem';
 import GroupItem from './GroupItem';
@@ -125,6 +126,7 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
   showTimeRemaining,
 }) => {
   const _ = useTranslation();
+  const hideAccount = isReadestAccountHidden();
   const { appService } = useEnv();
   const { settings } = useSettingsStore();
   const { openBook } = useOpenBook({ setLoading, handleBookDownload });
@@ -273,10 +275,15 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
         },
       },
     };
-    return getBookContextMenuItemIds(book, {
-      localSend: isTauriAppPlatform() && isLocalSendEnabled(),
-      absOffline: isTauriAppPlatform(),
-    }).map((id) => itemOptions[id]);
+    return (
+      getBookContextMenuItemIds(book, {
+        localSend: isTauriAppPlatform() && isLocalSendEnabled(),
+        absOffline: isTauriAppPlatform(),
+      })
+        // Sharing needs a Readest account; local-first mode has none.
+        .filter((id) => !hideAccount || id !== 'share')
+        .map((id) => itemOptions[id])
+    );
   };
 
   const buildGroupMenuItems = (group: BooksGroup): BookContextMenuItem[] => {

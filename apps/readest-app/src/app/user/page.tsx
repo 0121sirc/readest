@@ -13,6 +13,7 @@ import { useUserActions } from '@/hooks/useUserActions';
 import { useAvailablePlans } from '@/hooks/useAvailablePlans';
 import type { PlanType } from '@/types/quota';
 import { navigateToLibrary } from '@/utils/nav';
+import { isReadestAccountHidden } from '@/utils/access';
 import { eventDispatcher } from '@/utils/event';
 import { isTauriAppPlatform } from '@/services/environment';
 import { getPlanDetails, shouldUseBillingPortal } from './utils/plan';
@@ -80,6 +81,12 @@ const ProfilePage = () => {
 
   useEffect(() => {
     if (!mounted) return;
+
+    // Local-first mode has no account page; send the user back to the library.
+    if (isReadestAccountHidden()) {
+      router.replace('/library');
+      return;
+    }
 
     const isAuthenticated = user && token && appService;
     if (isAuthenticated) return;

@@ -23,7 +23,8 @@ import { createThrottledCheckpoint } from '@/utils/checkpoint';
 import { DEFAULT_NEARBY_WORDS } from '@/utils/searchConfig';
 import { clearLibrarySearchHistory, loadLibrarySearchHistory } from './utils/searchHistory';
 import type { LibrarySearchTarget } from '@/types/book';
-import { navigateToLibrary, navigateToLogin, navigateToReader } from '@/utils/nav';
+import { navigateToLibrary, navigateToReader } from '@/utils/nav';
+import { isReadestAccountHidden } from '@/utils/access';
 import { splitLibraryOpenIds } from '@/utils/audiobook';
 import { getBookWithUpdatedMetadata, listFormater } from '@/utils/book';
 import { getImportErrorMessage } from '@/services/errors';
@@ -394,18 +395,12 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
   usePullToRefresh(
     scrollRef,
     async () => {
-      if (!user) {
-        navigateToLogin(router);
-        return;
-      }
+      // Local-first mode works without an account: `pullLibrary` no-ops when no
+      // provider is configured and otherwise runs the third-party file pass.
       await pullLibrary(false, true);
       checkOPDSSubscriptions(true);
     },
     async () => {
-      if (!user) {
-        navigateToLogin(router);
-        return;
-      }
       await pullLibrary(true, true);
       checkOPDSSubscriptions(true);
     },
@@ -720,6 +715,9 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
     isInitiating.current = true;
 
     const initLogin = async () => {
+      // Local-first mode has no account to keep logged in (and no login page
+      // to bounce to), so the persisted `keepLogin` must not force a redirect.
+      if (isReadestAccountHidden()) return;
       const appService = await envConfig.getAppService();
       const settings = await appService.loadSettings();
       if (token && user) {

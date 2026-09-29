@@ -7,6 +7,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAppRouter } from '@/hooks/useAppRouter';
 import { navigateToLogin } from '@/utils/nav';
+import { isReadestAccountHidden } from '@/utils/access';
+import { setBackupDialogVisible } from './BackupWindow';
 import LibraryImportButton from './LibraryImportButton';
 
 interface LibraryEmptyStateProps {
@@ -19,6 +21,7 @@ const LibraryEmptyState: React.FC<LibraryEmptyStateProps> = ({ onImport }) => {
   const { user } = useAuth();
   const router = useAppRouter();
   const isMobile = appService?.isMobile ?? false;
+  const hideAccount = isReadestAccountHidden();
 
   return (
     <div className='hero-content text-neutral-content text-center'>
@@ -36,7 +39,7 @@ const LibraryEmptyState: React.FC<LibraryEmptyStateProps> = ({ onImport }) => {
           <LibraryImportButton onImport={onImport} primary />
           {/* TODO: add a 'Browse free catalogs' secondary action that opens the
               OPDS dialog (handleShowOPDSDialog) once we settle on placement. */}
-          {!user && (
+          {!hideAccount && !user && (
             <button
               type='button'
               className={clsx(
@@ -47,6 +50,19 @@ const LibraryEmptyState: React.FC<LibraryEmptyStateProps> = ({ onImport }) => {
               onClick={() => navigateToLogin(router)}
             >
               {_('Sign in to sync your library')}
+            </button>
+          )}
+          {hideAccount && (
+            <button
+              type='button'
+              className={clsx(
+                'text-base-content/70 hover:text-base-content mt-1 py-2 text-sm font-medium',
+                'underline underline-offset-4',
+                'focus-visible:text-base-content focus-visible:outline-hidden',
+              )}
+              onClick={() => setBackupDialogVisible(true)}
+            >
+              {_('Manual Sync / Backup & Restore')}
             </button>
           )}
         </div>

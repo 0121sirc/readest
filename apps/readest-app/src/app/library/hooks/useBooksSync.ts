@@ -184,8 +184,14 @@ export const useBooksSync = () => {
     handleAutoSyncRef.current = handleAutoSync;
   }, [handleAutoSync]);
 
+  // Local-first mode has no account: auto-sync / boot pull must still run for
+  // a configured third-party file backend. The native (Readest Cloud) legs
+  // stay `user`-gated inside `pullLibrary`.
+  const hasFileBackends = () =>
+    getActiveFileSyncBackends(useSettingsStore.getState().settings).length > 0;
+
   useEffect(() => {
-    if (!user) return;
+    if (!user && !hasFileBackends()) return;
     handleAutoSync();
   }, [user, library, handleAutoSync]);
 
@@ -198,7 +204,7 @@ export const useBooksSync = () => {
   }, [user, syncBooks, getNewBooks]);
 
   useEffect(() => {
-    if (!user || !useSyncInited || !libraryLoaded) return;
+    if ((!user && !hasFileBackends()) || !useSyncInited || !libraryLoaded) return;
     pullLibrary();
   }, [user, useSyncInited, libraryLoaded, pullLibrary]);
 

@@ -29,6 +29,7 @@ import {
   navigateToLibrary,
 } from '@/utils/nav';
 import { clearDiscordPresence } from '@/utils/discord';
+import { isReadestAccountHidden } from '@/utils/access';
 import { BOOK_IDS_SEPARATOR } from '@/services/constants';
 import { BookDetailModal } from '@/components/metadata';
 import ShareBookDialog from '@/app/library/components/ShareBookDialog';
@@ -182,6 +183,8 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
 
   useEffect(() => {
     const handleShareIntent = (event: CustomEvent) => {
+      // Sharing needs a Readest account; local-first mode has none.
+      if (isReadestAccountHidden()) return;
       const detail = event.detail as { book: Book; cfi?: string | null } | undefined;
       if (!detail?.book) return;
       if (!user) {
