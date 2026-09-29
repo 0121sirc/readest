@@ -8,8 +8,8 @@
 const CONFIG_KEY = 'readest-tts-openai';
 
 export const OPENAI_TTS_MIN_LOOKAHEAD = 1;
-export const OPENAI_TTS_MAX_LOOKAHEAD = 6;
-export const OPENAI_TTS_DEFAULT_LOOKAHEAD = 3;
+export const OPENAI_TTS_MAX_LOOKAHEAD = 10;
+export const OPENAI_TTS_DEFAULT_LOOKAHEAD = 5;
 
 export interface OpenAITTSConfig {
   // API root, e.g. https://api.openai.com/v1. Empty means the engine is off.

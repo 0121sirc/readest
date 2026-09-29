@@ -15,7 +15,7 @@ import { SectionTimeline, TimelineSentence } from './SectionTimeline';
 import { hydrateProvisionalDurations } from './ttsDuration';
 import type { TTSDownloader } from './TTSDownloader';
 import { TTSUtils } from './TTSUtils';
-import { TTSClient } from './TTSClient';
+import { TTSClient, TTSQueueSentence } from './TTSClient';
 import { startAudioKeepAlive, stopAudioKeepAlive } from './WebAudioPlayer';
 import { isValidLang } from '@/utils/lang';
 import { normalizeLyricText } from '@/utils/ttsLyrics';
@@ -87,6 +87,48 @@ export interface TTSViewBindings {
 // Defined in ./gaps and re-exported here for the existing importers.
 export { DEFAULT_PARAGRAPH_GAP_SEC } from './gaps';
 
+// Sentence-merging targets for the section queue: aim for ~TARGET characters
+// per synthesized chunk, never exceeding MAX unless a single sentence is longer
+// (novel-reader uses ~60). Merging only happens within one paragraph block.
+const TTS_QUEUE_TARGET_CHARS = 50;
+const TTS_QUEUE_MAX_CHARS = 80;
+
+const isSpeakableText = (text: string): boolean => {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && !/^[\p{P}\p{S}\s]+$/u.test(trimmed);
+};
+
+const mergeTimelineSentences = (sentences: TimelineSentence[]): TimelineSentence[] => {
+  const merged: TimelineSentence[] = [];
+  let i = 0;
+  while (i < sentences.length) {
+    const first = sentences[i]!;
+    const block = first.blockIndex;
+    let last = first;
+    let text = first.text;
+    let end = i;
+    while (end + 1 < sentences.length && sentences[end + 1]!.blockIndex === block) {
+      if (text.length >= TTS_QUEUE_TARGET_CHARS) break;
+      const next = sentences[end + 1]!;
+      if (text.length > 0 && text.length + next.text.length > TTS_QUEUE_MAX_CHARS) break;
+      last = next;
+      end += 1;
+      text += next.text;
+    }
+    if (isSpeakableText(text)) {
+      const range = first.range.cloneRange();
+      try {
+        range.setEnd(last.range.endContainer, last.range.endOffset);
+      } catch {
+        // Non-spanning merge (rare): keep the first sentence's range.
+      }
+      merged.push({ blockIndex: block, markName: first.markName, range, text });
+    }
+    i = end + 1;
+  }
+  return merged;
+};
+
 export class TTSController extends EventTarget {
   // PlaybackSource tag: the media bridge and the session manager consume this
   // controller through that seam, and TTS-only consumers narrow back with
@@ -118,6 +160,13 @@ export class TTSController extends EventTarget {
   #sectionTimeline: SectionTimeline | null = null;
   #timelineSectionIndex: number = -1;
   #currentSentenceIndex: number = -1;
+  // Section-queue runtime (serial engines). `#queueSentenceIndex` is the
+  // sentence ordinal within the current section that playback is on.
+  #queueAbort: AbortController | null = null;
+  #queueSentenceIndex: number = -1;
+  // The range a `tts-speak` session should begin at (captured by
+  // startFromRange); the queue maps it to a sentence ordinal.
+  #queueStartRange: Range | null = null;
   // Set while an utterance has been handed to the client but no audio has been
   // heard from it yet — synthesis, network, decode, or a recording still
   // loading. The first event the speak() iterator yields IS the first audible
@@ -630,6 +679,7 @@ export class TTSController extends EventTarget {
   // Position the text iterator and, for a chapter-only audiobook mapping,
   // carry the current page's proportional offset into the first audio chunk.
   startFromRange(range: Range): string | undefined {
+    this.#queueStartRange = range;
     const tts = this.#getTts();
     const ssml = tts?.from(range);
     if (
@@ -641,6 +691,146 @@ export class TTSController extends EventTarget {
       if (position !== null) this.ttsClient.setNextChunkPosition?.(position);
     }
     return ssml;
+  }
+
+  // ---- Section sentence queue (serial engines) -------------------------
+
+  #sectionQueueEnabled(): boolean {
+    return typeof this.ttsClient.speakQueue === 'function';
+  }
+
+  #queueSentences(timeline: SectionTimeline): TTSQueueSentence[] {
+    const lang = this.ttsLang || 'en';
+    const out: TTSQueueSentence[] = [];
+    for (let i = 0; i < timeline.length; i++) {
+      const sentence = timeline.sentenceAt(i);
+      if (!sentence) continue;
+      out.push({ text: sentence.text, lang, blockIndex: sentence.blockIndex });
+    }
+    return out;
+  }
+
+  async #queueStartIndex(): Promise<number> {
+    const timeline = await this.ensureTimeline();
+    if (!timeline || timeline.length === 0) return -1;
+    const candidates = [this.#queueStartRange, this.#getTts()?.getLastRange() ?? null];
+    for (const range of candidates) {
+      if (!range) continue;
+      const index = timeline.indexOfRange(range);
+      if (index >= 0) return index;
+    }
+    return 0;
+  }
+
+  // Highlight a sentence and report the position, without a foliate mark.
+  dispatchSentence(range: Range, text: string): void {
+    this.#getHighlighter()(range);
+    this.dispatchEvent(new CustomEvent('tts-speak-mark', { detail: { text, name: '' } }));
+    try {
+      const cfi = this.view.getCFI(this.#ttsSectionIndex, range);
+      this.dispatchEvent(new CustomEvent('tts-highlight-mark', { detail: { cfi } }));
+      this.#dispatchPosition(cfi, 'sentence');
+    } catch {
+      // Stale range (section swapped under us); highlight only.
+    }
+  }
+
+  // Drive a whole section through the client's sentence queue. Resolves when
+  // the session ends (section finished, stopped, or error).
+  async #runQueue(startIndex: number): Promise<void> {
+    if (startIndex < 0 || !this.ttsClient.speakQueue) return;
+    const timeline = await this.ensureTimeline();
+    if (!timeline || timeline.length === 0) return;
+
+    this.#queueAbort?.abort('restart');
+    const abort = new AbortController();
+    this.#queueAbort = abort;
+    await this.ttsClient.stop().catch(() => {});
+
+    this.#queueStartRange = null;
+    this.#queueSentenceIndex = Math.min(Math.max(startIndex, 0), timeline.length - 1);
+    this.#currentSentenceIndex = this.#queueSentenceIndex;
+    this.#awaitingAudio = true;
+    this.state = 'playing';
+
+    const sentences = this.#queueSentences(timeline);
+    try {
+      const iter = this.ttsClient.speakQueue(sentences, this.#queueSentenceIndex, abort.signal);
+      for await (const event of iter) {
+        if (abort.signal.aborted) return;
+        if (event.code === 'boundary' && typeof event.index === 'number') {
+          this.#awaitingAudio = false;
+          this.#queueSentenceIndex = event.index;
+          this.#currentSentenceIndex = event.index;
+          const sentence = timeline.sentenceAt(event.index);
+          if (sentence) this.dispatchSentence(sentence.range, sentence.text);
+          this.#sectionTimeline?.refresh();
+        } else if (event.code === 'error') {
+          if (abort.signal.aborted) return;
+          this.#terminate('error');
+          await this.stop();
+          return;
+        }
+      }
+    } catch (err) {
+      if (abort.signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
+      this.error(err as Error);
+      return;
+    }
+    if (abort.signal.aborted) return;
+
+    // Section finished.
+    if (this.stopAtChapterEnd) {
+      await this.#stopAtChapterBoundary();
+      return;
+    }
+    if (await this.#initTTSForNextSection()) {
+      this.#sectionTimeline = null;
+      this.#timelineSectionIndex = -1;
+      void this.#runQueue(0).catch(() => {});
+    } else {
+      this.#terminate('ended');
+      await this.stop();
+    }
+  }
+
+  // Move the queue by whole sentences (byMark) or whole paragraphs.
+  async #queueSeekRelative(byMark: boolean, direction: 1 | -1): Promise<void> {
+    const timeline = await this.ensureTimeline();
+    if (!timeline || timeline.length === 0) return;
+    const current = this.#queueSentenceIndex;
+    let target = current;
+    if (byMark) {
+      target = current + direction;
+    } else {
+      const currentBlock = timeline.sentenceAt(current)?.blockIndex ?? 0;
+      target = current + direction;
+      while (target >= 0 && target < timeline.length) {
+        if (timeline.sentenceAt(target)?.blockIndex !== currentBlock) break;
+        target += direction;
+      }
+    }
+    if (target < 0) {
+      if (await this.#initTTSForPrevSection()) {
+        this.#sectionTimeline = null;
+        this.#timelineSectionIndex = -1;
+        const next = await this.ensureTimeline();
+        void this.#runQueue(next ? next.length - 1 : 0).catch(() => {});
+      }
+      return;
+    }
+    if (target >= timeline.length) {
+      if (await this.#initTTSForNextSection()) {
+        this.#sectionTimeline = null;
+        this.#timelineSectionIndex = -1;
+        void this.#runQueue(0).catch(() => {});
+      } else {
+        this.#terminate('ended');
+        await this.stop();
+      }
+      return;
+    }
+    void this.#runQueue(target).catch(() => {});
   }
 
   async #initTTSForSection(sectionIndex: number): Promise<boolean> {
@@ -802,6 +992,14 @@ export class TTSController extends EventTarget {
           text: this.#skipInlineAnnotations ? stripInlineReadingAnnotations(text) : text,
         });
       }
+      // The section queue synthesizes per chunk, so merge short sentences into
+      // evenly sized ~50-char chunks before building the timeline (which the
+      // scrubber/lyrics and the queue both consume).
+      if (this.#sectionQueueEnabled()) {
+        const merged = mergeTimelineSentences(sentences);
+        sentences.length = 0;
+        sentences.push(...merged);
+      }
     }
     // The section moved on while this was being enumerated: these sentences
     // belong to a document nobody is reading any more. Drop them; the next
@@ -937,7 +1135,8 @@ export class TTSController extends EventTarget {
   // Playing, but nothing audible yet: synthesis, network, decode, or a
   // recording still loading. Drives the spinner in the lyric play button.
   isBuffering(): boolean {
-    return this.#awaitingAudio && this.state === 'playing';
+    if (this.state !== 'playing') return false;
+    return this.#awaitingAudio || !!this.ttsClient.isBuffering?.();
   }
 
   // Start speaking at a lyric line. Unlike the scrubber's seek this always
@@ -946,6 +1145,10 @@ export class TTSController extends EventTarget {
   async seekToLyric(index: number): Promise<void> {
     this.clearSeekPreview();
     await this.initViewTTS();
+    if (this.#sectionQueueEnabled()) {
+      void this.#runQueue(index).catch(() => {});
+      return;
+    }
     const timeline = await this.ensureTimeline();
     const sentence = timeline?.sentenceAt(index);
     if (!sentence) return;
@@ -1125,6 +1328,10 @@ export class TTSController extends EventTarget {
     if (!timeline) return;
     const target = timeline.sentenceAtTime(seconds);
     if (!target) return;
+    if (this.#sectionQueueEnabled()) {
+      void this.#runQueue(target.index).catch(() => {});
+      return;
+    }
     const range = this.#rangeAtSeekTarget(target.sentence, target.withinMediaSec);
     if (
       target.index === this.#currentSentenceIndex &&
@@ -1488,6 +1695,13 @@ export class TTSController extends EventTarget {
 
   async speak(ssml: string | Promise<string>, oneTime = false, oneTimeCallback?: () => void) {
     await this.initViewTTS();
+    // Continuous sessions on a serial engine run the whole section through the
+    // sentence queue; one-shot utterances still use the block/SSML path.
+    if (!oneTime && this.#sectionQueueEnabled()) {
+      const startIndex = await this.#queueStartIndex();
+      void this.#runQueue(startIndex).catch(() => {});
+      return;
+    }
     this.#speak(ssml, oneTime)
       .then(() => {
         if (oneTime && oneTimeCallback) {
@@ -1511,6 +1725,20 @@ export class TTSController extends EventTarget {
 
   async start() {
     await this.initViewTTS();
+    if (this.#sectionQueueEnabled()) {
+      // A genuine user pause keeps the queue/session alive, so resume it. Every
+      // other transient state ('setrate-paused', 'setvoice-paused', 'stopped',
+      // 'forward-paused', ...) follows a stop() that tore the session down, so
+      // the queue must be (re)started from the current sentence.
+      if (this.state === 'paused') {
+        await this.resume();
+        return;
+      }
+      const index =
+        this.#queueSentenceIndex >= 0 ? this.#queueSentenceIndex : await this.#queueStartIndex();
+      void this.#runQueue(index).catch(() => {});
+      return;
+    }
     // Always resume from the current list position instead of calling tts.start().
     // tts.start() resets the TTS list to position 0 (section beginning), which is
     // wrong when state transiently becomes 'stopped' during forward()/backward()
@@ -1540,6 +1768,8 @@ export class TTSController extends EventTarget {
 
   async stop(handover = false) {
     this.#awaitingAudio = false;
+    this.#queueAbort?.abort('stopped');
+    this.#queueAbort = null;
     if (this.#currentSpeakAbortController) {
       this.#currentSpeakAbortController.abort();
     }
@@ -1559,6 +1789,10 @@ export class TTSController extends EventTarget {
 
   // goto previous mark/paragraph
   async backward(byMark = false) {
+    if (this.#sectionQueueEnabled() && !this.usesAudioTransport()) {
+      await this.#queueSeekRelative(byMark, -1);
+      return;
+    }
     if (this.usesAudioTransport()) {
       if (byMark) await this.#seekBy(-SKIP_BACKWARD_SEC);
       else await this.#stepAudioChapter(-1);
@@ -1593,6 +1827,10 @@ export class TTSController extends EventTarget {
   // skip ahead and getting playback stopped instead is the opposite of the
   // request, and on the lock screen there is no obvious way to recover.
   async forward(byMark = false, isAutoAdvance = false) {
+    if (this.#sectionQueueEnabled() && !this.usesAudioTransport()) {
+      await this.#queueSeekRelative(byMark, 1);
+      return;
+    }
     if (!isAutoAdvance && this.usesAudioTransport()) {
       if (byMark) await this.#seekBy(SKIP_FORWARD_SEC);
       else await this.#stepAudioChapter(1);
@@ -1990,6 +2228,11 @@ export class TTSController extends EventTarget {
     // `state === 'playing'` check then falls through to a no-op, and #speak's
     // auto-forward gate skips advancing to the next paragraph.
     if (e instanceof Error && (e.name === 'AbortError' || e.message === 'Aborted')) {
+      return;
+    }
+    // Abort reasons we set explicitly ('stopped'/'restart') can surface as
+    // plain strings through fetch rejections; never treat them as faults.
+    if (typeof e === 'string' && /abort|stopped|restart/i.test(e)) {
       return;
     }
     console.error(e);

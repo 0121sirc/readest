@@ -2,7 +2,7 @@ import { getOSPlatform, getUserLocale } from '@/utils/misc';
 import { isTauriAppPlatform } from '@/services/environment';
 import { isSameLang } from '@/utils/lang';
 import { NativeAudioPlayer } from './NativeAudioPlayer';
-import { TTSClient, TTSCapabilities, TTSMessageEvent } from './TTSClient';
+import { TTSClient, TTSCapabilities, TTSMessageEvent, TTSQueueSentence } from './TTSClient';
 import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
 import { AppService } from '@/types/system';
 import { parseSSMLMarks } from '@/utils/ssml';
@@ -58,12 +58,16 @@ interface ChunkMeta {
   trimmedDurationSec: number;
   // The exact synthesis request, for manifest key recording at chunk-start.
   req?: SpeechSynthesisRequest;
+  // Section-queue path: the section sentence ordinal this chunk realizes, so
+  // the queue can report a boundary when the chunk actually starts sounding.
+  sentenceIndex?: number;
 }
 
 type SpeakQueueEvent =
   | { kind: 'chunk-start'; index: number }
   | { kind: 'chunk-skip'; markName: string }
   | { kind: 'session-end' }
+  | { kind: 'aborted' }
   | { kind: 'error'; message: string };
 
 class AsyncQueue<T> {
@@ -119,6 +123,12 @@ export class BufferedTTSClient implements TTSClient {
   // skipping to the end. A user-initiated restart builds a fresh client, so it
   // starts at 0 there too.
   #consecutiveSkips = 0;
+  // Section queue: true while the consumer is waiting for the producer to
+  // refill (surfaced as the player's "buffering" spinner).
+  #queueBuffering = false;
+  // Wakes the queue's producer/consumer loops when state changes (chunk ready,
+  // buffer space freed, abort) or when stopInternal tears the session down.
+  #queueWake: (() => void) | null = null;
 
   constructor(
     provider: SpeechProvider,
@@ -161,6 +171,8 @@ export class BufferedTTSClient implements TTSClient {
         return { data: audio, boundaries };
       } catch (err) {
         if (err instanceof SpeechSynthesisPermanentError) throw err;
+        // A stop/seek aborting an in-flight request is expected, not a fault.
+        if (signal.aborted) return undefined;
         lastError = err;
         console.warn(`TTS synthesis attempt ${attempt}/${maxAttempts} failed`, err);
         if (attempt < maxAttempts && !signal.aborted) {
@@ -168,6 +180,7 @@ export class BufferedTTSClient implements TTSClient {
         }
       }
     }
+    if (signal.aborted) return undefined;
     throw lastError;
   };
 
@@ -279,8 +292,11 @@ export class BufferedTTSClient implements TTSClient {
         } else if (event.kind === 'session-end') {
           yield { code: 'end', message: 'Speak finished' } as TTSMessageEvent;
           return;
-        } else {
+        } else if (event.kind === 'error') {
           yield { code: 'error', message: event.message } as TTSMessageEvent;
+          return;
+        } else {
+          // 'aborted'
           return;
         }
       }
@@ -299,6 +315,16 @@ export class BufferedTTSClient implements TTSClient {
   }
 
   async *#preload(marks: TTSMark[], signal: AbortSignal) {
+    if (this.provider.serialSynthesis) {
+      // The server handles one request at a time. Preloading this block in
+      // parallel would queue ahead of the sentence being spoken and delay it;
+      // the scheduler already keeps the next chunks synthesized in order.
+      yield {
+        code: 'end',
+        message: 'Preload skipped',
+      } as TTSMessageEvent;
+      return;
+    }
     // Fetch the first couple of marks immediately and the rest in the
     // background; the provider's in-flight dedup keeps this from racing
     // duplicate requests against the playback scheduler.
@@ -536,6 +562,251 @@ export class BufferedTTSClient implements TTSClient {
     return 1;
   }
 
+  // True while the section queue is starved (consumer waiting on the producer).
+  isBuffering(): boolean {
+    return this.#queueBuffering;
+  }
+
+  // Section-level producer/consumer. A background task synthesizes the whole
+  // section's sentences in order into a bounded buffer while a consumer
+  // schedules them gaplessly:
+  //   - the producer fills the buffer up to `getPrefetchDepth()` (1..10);
+  //   - the consumer schedules the next sentence as soon as it is buffered and
+  //     deletes it; when the buffer drops to half it holds off scheduling and
+  //     waits for a refill (surfaced as "buffering");
+  //   - the first sentence is played as soon as it is ready (no full prefill).
+  // Boundaries are yielded when a chunk ACTUALLY STARTS SOUNDING (the player's
+  // chunk-start event), never at schedule time — the player queues a couple of
+  // chunks ahead, so scheduling-time highlights would run ahead of the voice.
+  // Requests stay serial because the provider serializes them.
+  async *speakQueue(
+    sentences: TTSQueueSentence[],
+    startIndex: number,
+    signal: AbortSignal,
+  ): AsyncGenerator<TTSMessageEvent> {
+    await this.stopInternal();
+    const rate = this.#rate;
+    const depth = Math.max(1, Math.floor(this.getPrefetchDepth()));
+    const useNative = this.#player instanceof NativeAudioPlayer;
+
+    type Entry =
+      | { kind: 'web'; buffer: TTSAudioBuffer; trimStartSec: number; trimmedDurationSec: number }
+      | { kind: 'raw'; data: ArrayBuffer }
+      | { kind: 'skip' };
+    const buffers = new Map<number, Entry>();
+    const chunkMeta: ChunkMeta[] = [];
+    this.#chunkMeta = chunkMeta;
+    const events = new AsyncQueue<SpeakQueueEvent>();
+    let produceDone = false;
+    let aborted = false;
+
+    const waiters = new Set<() => void>();
+    const wake = () => {
+      const pending = [...waiters];
+      waiters.clear();
+      for (const resolve of pending) resolve();
+    };
+    this.#queueWake = wake;
+    const waitWake = () =>
+      new Promise<void>((resolve) => {
+        waiters.add(resolve);
+      });
+    const onAbort = () => {
+      aborted = true;
+      wake();
+      events.push({ kind: 'aborted' });
+    };
+    signal.addEventListener('abort', onAbort);
+
+    const generation = this.#player.startSession(
+      (event) => {
+        if (event.type === 'chunk-start') {
+          events.push({ kind: 'chunk-start', index: event.chunkIndex });
+        } else if (event.type === 'session-end') {
+          events.push({ kind: 'session-end' });
+        } else {
+          events.push({ kind: 'error', message: event.message });
+        }
+      },
+      { startAfterPreviousSec: 0 },
+    );
+    this.#activeGeneration = generation;
+    try {
+      await this.#player.ensureContext();
+    } catch (err) {
+      if (!signal.aborted) throw err;
+      return;
+    }
+    this.#isPlaying = true;
+
+    // Producer: synthesize sentence p in order once there is buffer room.
+    const producer = (async () => {
+      for (let p = startIndex; p < sentences.length; p++) {
+        if (aborted || this.#activeGeneration !== generation) break;
+        while (buffers.size >= depth && !aborted && this.#activeGeneration === generation) {
+          await waitWake();
+        }
+        if (aborted || this.#activeGeneration !== generation) break;
+        const sentence = sentences[p]!;
+        try {
+          const voiceId = await this.getVoiceIdFromLang(sentence.lang);
+          const audio = await this.#synthesizeWithRetry(
+            sentence.lang,
+            sentence.text,
+            voiceId,
+            signal,
+          );
+          if (!audio) break;
+          if (useNative) {
+            this.#recordDurations(voiceId, sentence.text, audio.boundaries);
+            buffers.set(p, { kind: 'raw', data: audio.data });
+          } else {
+            const prepared = await this.#prepareChunkBuffer(
+              this.#player as WebAudioPlayer,
+              audio.data,
+              rate,
+            );
+            this.#recordDurations(
+              voiceId,
+              sentence.text,
+              audio.boundaries,
+              prepared.trimmedDurationSec,
+            );
+            buffers.set(p, { kind: 'web', ...prepared });
+          }
+        } catch (err) {
+          if (err instanceof SpeechSynthesisPermanentError) {
+            console.warn('No audio data received for:', sentence.text);
+          } else if (!aborted) {
+            console.warn('TTS queue synthesis failed:', sentence.text, err);
+          }
+          buffers.set(p, { kind: 'skip' });
+        }
+        wake();
+      }
+      produceDone = true;
+      wake();
+    })();
+
+    // Consumer: schedule sentences in order, deleting each once scheduled.
+    const consumer = (async () => {
+      try {
+        for (let c = startIndex; c < sentences.length; c++) {
+          while (!buffers.has(c) && !produceDone && !aborted) {
+            this.#queueBuffering = true;
+            await waitWake();
+          }
+          this.#queueBuffering = false;
+          if (aborted || this.#activeGeneration !== generation) return;
+
+          const entry = buffers.get(c);
+          buffers.delete(c);
+          wake();
+          if (!entry) break;
+          if (entry.kind === 'skip') continue;
+
+          // Keep at least two chunks buffered ahead: only when fewer than two
+          // remain does the consumer hold off and wait for a refill (surfaced as
+          // "buffering"). Above that it schedules straight through.
+          const MIN_BUFFERED = 2;
+          if (buffers.size < MIN_BUFFERED && !produceDone && c + 1 < sentences.length) {
+            this.#queueBuffering = true;
+            while (buffers.size < MIN_BUFFERED && !produceDone && !aborted) await waitWake();
+            if (aborted || this.#activeGeneration !== generation) return;
+            this.#queueBuffering = false;
+          }
+
+          const ready = await this.#player.waitUntilReady(generation);
+          if (!ready || aborted) return;
+
+          const sentence = sentences[c]!;
+          const nextBlock = c + 1 < sentences.length ? sentences[c + 1]!.blockIndex : -1;
+          const gapSec =
+            nextBlock !== -1 && nextBlock !== sentence.blockIndex
+              ? this.#paragraphGapSec
+              : this.#sentenceGapSec;
+
+          const mark: TTSMark = {
+            offset: 0,
+            name: String(c),
+            text: sentence.text,
+            language: sentence.lang,
+          };
+          chunkMeta.push({
+            mark,
+            boundaries: [],
+            trimStartSec: 0,
+            trimmedDurationSec: 0,
+            sentenceIndex: c,
+          });
+          const index = chunkMeta.length - 1;
+
+          if (entry.kind === 'raw' && this.#player instanceof NativeAudioPlayer) {
+            try {
+              const durationSec = await this.#player.scheduleRawChunk(
+                generation,
+                index,
+                entry.data,
+                { gapSec },
+              );
+              chunkMeta[index]!.trimmedDurationSec = durationSec;
+            } catch (error) {
+              console.warn('Failed to enqueue TTS audio for:', sentence.text, error);
+            }
+          } else if (entry.kind === 'web') {
+            chunkMeta[index]!.trimStartSec = entry.trimStartSec;
+            chunkMeta[index]!.trimmedDurationSec = entry.trimmedDurationSec;
+            (this.#player as WebAudioPlayer).scheduleChunk(generation, entry.buffer, {
+              trimStartSec: entry.trimStartSec,
+              mediaScale: entry.trimmedDurationSec / entry.buffer.duration,
+              gapSec,
+            });
+          }
+        }
+        if (!aborted && this.#activeGeneration === generation) {
+          this.#player.endSession(generation);
+        }
+      } catch (error) {
+        events.push({
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+
+    try {
+      if (signal.aborted) return;
+      for (;;) {
+        const event = await events.next();
+        if (event.kind === 'aborted') return;
+        if (event.kind === 'chunk-start') {
+          const meta = chunkMeta[event.index];
+          if (!meta) continue;
+          const sentenceIndex = meta.sentenceIndex ?? event.index;
+          yield { code: 'boundary', index: sentenceIndex, message: `Sentence ${sentenceIndex}` };
+        } else if (event.kind === 'session-end') {
+          yield { code: 'end', message: 'Queue finished' };
+          return;
+        } else if (event.kind === 'error') {
+          yield { code: 'error', message: event.message };
+          return;
+        }
+      }
+    } finally {
+      aborted = true;
+      wake();
+      signal.removeEventListener('abort', onAbort);
+      this.#queueWake = null;
+      this.#queueBuffering = false;
+      await Promise.allSettled([producer, consumer]);
+      this.#isPlaying = false;
+      if (this.#activeGeneration === generation) {
+        this.#activeGeneration = null;
+        this.#player.abortSession();
+      }
+    }
+  }
+
   async #prepareChunkBuffer(
     player: WebAudioPlayer,
     data: ArrayBuffer,
@@ -620,6 +891,7 @@ export class BufferedTTSClient implements TTSClient {
   protected async stopInternal() {
     this.#stopWordTracking();
     this.#isPlaying = false;
+    this.#queueWake?.();
     if (this.#activeGeneration !== null) {
       this.#activeGeneration = null;
       // Unblock a generator awaiting the queue; without this a stop() outside

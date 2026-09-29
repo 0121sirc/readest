@@ -70,6 +70,11 @@ export interface SpeechProvider {
   // Whether synthesized audio may be persisted. Some services forbid
   // storing their output; CachingProvider bypasses the store when false.
   readonly cacheable?: boolean;
+  // Synthesis is serialized and rate-limited by the server (e.g. a
+  // single-worker self-hosted endpoint). The buffered client then skips the
+  // controller's parallel preload, which would otherwise queue ahead of the
+  // sentence being spoken, and keeps at most one request in flight.
+  readonly serialSynthesis?: boolean;
   // Release provider resources (network handles, cache databases) when the
   // owning client shuts down.
   shutdown?(): Promise<void>;

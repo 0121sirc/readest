@@ -53,13 +53,16 @@ export async function POST(req: Request): Promise<Response> {
       });
     }
 
-    const audio = await upstream.arrayBuffer();
-    return new Response(audio, {
-      status: 200,
-      headers: {
-        'Content-Type': upstream.headers.get('content-type') || 'audio/mpeg',
-      },
+    // Stream the upstream body straight through: PCM servers synthesize while
+    // sending, and buffering here would throw that overlap away.
+    const responseHeaders = new Headers({
+      'Content-Type': upstream.headers.get('content-type') || 'audio/mpeg',
     });
+    if (!upstream.body) {
+      const audio = await upstream.arrayBuffer();
+      return new Response(audio, { status: 200, headers: responseHeaders });
+    }
+    return new Response(upstream.body, { status: 200, headers: responseHeaders });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: `TTS proxy failed: ${message}` }, { status: 502 });

@@ -6,6 +6,16 @@ export interface TTSMessageEvent {
   code: TTSMessageCode;
   message?: string;
   mark?: string;
+  // Section-queue path: the sentence ordinal a boundary event refers to.
+  index?: number;
+}
+
+// One sentence in the section-level queue. `blockIndex` groups sentences into
+// paragraphs so the consumer can insert the paragraph gap between them.
+export interface TTSQueueSentence {
+  text: string;
+  lang: string;
+  blockIndex: number;
 }
 
 // What the active engine can actually do, so the controller and UI degrade
@@ -41,6 +51,17 @@ export interface TTSClient {
   init(): Promise<boolean>;
   shutdown(): Promise<void>;
   speak(ssml: string, signal: AbortSignal, preload?: boolean): AsyncIterable<TTSMessageEvent>;
+  // Section-level sentence queue: a background producer synthesizes the whole
+  // section's sentences in order into a bounded buffer while a consumer plays
+  // them back gaplessly. Implemented by engines whose server serializes
+  // requests (see OpenAITTSClient); yields a boundary per sentence, then end.
+  speakQueue?(
+    sentences: TTSQueueSentence[],
+    startIndex: number,
+    signal: AbortSignal,
+  ): AsyncIterable<TTSMessageEvent>;
+  // True while the queue consumer is waiting for the producer to refill.
+  isBuffering?(): boolean;
   pause(): Promise<boolean>;
   resume(): Promise<boolean>;
   // `handover` marks the stop the controller performs between two consecutive

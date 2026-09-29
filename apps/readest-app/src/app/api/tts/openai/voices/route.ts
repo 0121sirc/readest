@@ -17,6 +17,27 @@ const buildVoicesUrl = (baseUrl: string): string => {
   return trimmed.endsWith('/audio/voices') ? trimmed : `${trimmed}/audio/voices`;
 };
 
+const buildHealthUrl = (baseUrl: string): string => {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '');
+  return `${trimmed}/health`;
+};
+
+// Best-effort: adopt the server's PCM sample rate so raw `pcm` responses can be
+// wrapped into a WAV container with the right header. Unknown servers fall back
+// to the client's default.
+const fetchSampleRate = async (baseUrl: string, headers: Record<string, string>) => {
+  try {
+    const res = await fetch(buildHealthUrl(baseUrl), { headers });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { sample_rate?: number };
+    return typeof data.sample_rate === 'number' && data.sample_rate > 0
+      ? data.sample_rate
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const normalize = (data: unknown): NormalizedVoice[] => {
   if (!data || typeof data !== 'object') return [];
   const obj = data as {
@@ -70,7 +91,8 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const data = await upstream.json().catch(() => null);
-    return NextResponse.json({ voices: normalize(data) });
+    const sampleRate = await fetchSampleRate(baseUrl, headers);
+    return NextResponse.json({ voices: normalize(data), sampleRate });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: `Voices fetch failed: ${message}` }, { status: 502 });

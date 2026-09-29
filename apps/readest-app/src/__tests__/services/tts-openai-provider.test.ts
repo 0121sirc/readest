@@ -44,7 +44,7 @@ describe('OpenAITTS config', () => {
 
   test('clamps the look-ahead to 1-6', () => {
     expect(clampLookahead(0)).toBe(1);
-    expect(clampLookahead(99)).toBe(6);
+    expect(clampLookahead(99)).toBe(10);
     expect(clampLookahead(3.4)).toBe(3);
     expect(clampLookahead(undefined)).toBe(OPENAI_TTS_DEFAULT_LOOKAHEAD);
   });
@@ -111,7 +111,7 @@ describe('OpenAISpeechProvider', () => {
     expect(voices.map((v) => v.id)).toEqual(['cached-voice']);
   });
 
-  test('posts the OpenAI speech payload and returns mp3 bytes', async () => {
+  test('posts the OpenAI speech payload and returns the raw bytes', async () => {
     setOpenAITTSConfig({
       baseUrl: 'https://api.openai.com/v1/',
       apiKey: 'sk-test',
@@ -140,10 +140,40 @@ describe('OpenAISpeechProvider', () => {
       model: 'gpt-4o-mini-tts',
       input: 'hello world',
       voice: 'alloy',
-      responseFormat: 'mp3',
+      responseFormat: 'wav',
     });
     expect(result.audio.byteLength).toBe(4);
     expect(result.boundaries).toEqual([]);
+  });
+
+  test('wraps a PCM response in a WAV container', async () => {
+    setOpenAITTSConfig({
+      baseUrl: 'http://localhost:8080/v1',
+      apiKey: '',
+      model: '',
+      voices: 'bfy',
+      lookahead: 3,
+    });
+    const pcm = new Uint8Array([1, 0, 2, 0, 3, 0]);
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(pcm, {
+        status: 200,
+        headers: { 'Content-Type': 'audio/pcm' },
+      }),
+    ) as unknown as typeof fetch;
+
+    const provider = new OpenAISpeechProvider();
+    const { audio } = await provider.synthesize(
+      { lang: 'zh', text: '你好', voice: 'bfy', pitch: 1.0 },
+      new AbortController().signal,
+    );
+    const view = new DataView(audio);
+    const tag = (offset: number) => String.fromCharCode(...new Uint8Array(audio, offset, 4));
+    expect(tag(0)).toBe('RIFF');
+    expect(tag(8)).toBe('WAVE');
+    expect(tag(36)).toBe('data');
+    expect(audio.byteLength).toBe(44 + pcm.byteLength);
+    expect(view.getUint32(24, true)).toBe(24000);
   });
 
   test('caches synthesized audio and serves repeats without refetching', async () => {
