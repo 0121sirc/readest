@@ -123,7 +123,12 @@ export class OpenAISpeechProvider implements SpeechProvider {
       const ids = (data.voices ?? [])
         .map((voice) => voice.id)
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
-      if (ids.length > 0) setOpenAITTSConfig({ ...config, voices: ids.join(',') });
+      // Seed the default voice only when the user has not chosen one. A
+      // hand-entered voice (e.g. an Edge name like zh-CN-XiaoxiaoNeural) must
+      // survive a server that only advertises OpenAI aliases such as alloy.
+      if (ids.length > 0 && parseOpenAIVoices(config.voices).length === 0) {
+        setOpenAITTSConfig({ ...config, voices: ids.join(',') });
+      }
       return ids;
     } catch {
       return [];
@@ -133,8 +138,10 @@ export class OpenAISpeechProvider implements SpeechProvider {
   async getAllVoices(): Promise<TTSVoice[]> {
     if (!isOpenAITTSConfigured()) return [];
     const serverVoices = await this.#fetchServerVoices();
-    const ids =
-      serverVoices.length > 0 ? serverVoices : parseOpenAIVoices(getOpenAITTSConfig().voices);
+    // Configured voices first so a manually entered voice stays selectable even
+    // when the server's list does not include it.
+    const configured = parseOpenAIVoices(getOpenAITTSConfig().voices);
+    const ids = [...new Set([...configured, ...serverVoices])];
     return ids.map((id) => ({ id, name: id, lang: 'en' }));
   }
 

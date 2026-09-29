@@ -528,17 +528,19 @@ const TTSPlayerSheet = ({
                 {_('Speed')}
               </span>
             </button>
-            <button
-              type='button'
-              aria-label={_('Voice')}
-              onClick={() => setView('voice')}
-              className='not-eink:bg-base-200 eink-bordered flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl'
-            >
-              <RiVoiceAiFill size={iconSize18} />
-              <span className='text-base-content/60 max-w-full truncate px-1 text-xs'>
-                {currentVoiceName ? _(currentVoiceName) : _('Voice')}
-              </span>
-            </button>
+            {hasNarrationVoice && (
+              <button
+                type='button'
+                aria-label={_('Voice')}
+                onClick={() => setView('voice')}
+                className='not-eink:bg-base-200 eink-bordered flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl'
+              >
+                <RiVoiceAiFill size={iconSize18} />
+                <span className='text-base-content/60 max-w-full truncate px-1 text-xs'>
+                  {currentVoiceName ? _(currentVoiceName) : _('Voice')}
+                </span>
+              </button>
+            )}
             <button
               type='button'
               aria-label={_('Sleep Timer')}

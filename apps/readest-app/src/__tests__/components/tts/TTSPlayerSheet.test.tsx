@@ -184,10 +184,11 @@ describe('TTSPlayerSheet', () => {
     expect(screen.getByRole('slider')).toBeTruthy();
     expect(screen.getByLabelText('Previous Paragraph')).toBeTruthy();
     expect(screen.getByLabelText('Next Paragraph')).toBeTruthy();
-    // Compact one-row controls: speed / voice / sleep timer buttons.
+    // Compact one-row controls: speed / sleep timer buttons. The voice picker
+    // is hidden unless the book ships its own narration (voice lives in settings).
     expect(screen.getByLabelText('Speed')).toBeTruthy();
     expect(screen.getByLabelText('Sleep Timer')).toBeTruthy();
-    expect(await waitFor(() => screen.getByText('Ava'))).toBeTruthy(); // voice button caption
+    await waitFor(() => expect(screen.queryByLabelText('Voice')).toBeNull());
     // The main view carries no header label (vertical space).
     expect(screen.queryByText('Read Aloud')).toBeNull();
   });
@@ -399,9 +400,9 @@ describe('TTSPlayerSheet', () => {
   });
 
   test('voice button drills into the voice list and selects a voice', async () => {
-    const props = makeProps();
+    const props = makeProps({ onGetVoices: vi.fn().mockResolvedValue(narrationGroups) });
     render(<TTSPlayerSheet {...props} />);
-    fireEvent.click(screen.getByLabelText('Voice'));
+    fireEvent.click(await waitFor(() => screen.getByLabelText('Voice')));
     fireEvent.click(await waitFor(() => screen.getByText('Guy')));
     expect(props.onSetVoice).toHaveBeenCalledWith('guy', 'en-US');
     expect(viewSettings['ttsVoice']).toBe('guy');
@@ -495,7 +496,7 @@ describe('TTSPlayerSheet', () => {
   test('choosing the narrator records the per-book narration preference', async () => {
     const props = makeProps({ onGetVoices: vi.fn().mockResolvedValue(narrationGroups) });
     render(<TTSPlayerSheet {...props} />);
-    fireEvent.click(screen.getByLabelText('Voice'));
+    fireEvent.click(await waitFor(() => screen.getByLabelText('Voice')));
     fireEvent.click(await waitFor(() => screen.getByText('Jane Reader')));
 
     expect(props.onSetVoice).toHaveBeenCalledWith('media-overlay', 'en');
@@ -506,27 +507,24 @@ describe('TTSPlayerSheet', () => {
   test('choosing a synthetic voice opts this book out of its narration', async () => {
     const props = makeProps({ onGetVoices: vi.fn().mockResolvedValue(narrationGroups) });
     render(<TTSPlayerSheet {...props} />);
-    fireEvent.click(screen.getByLabelText('Voice'));
+    fireEvent.click(await waitFor(() => screen.getByLabelText('Voice')));
     fireEvent.click(await waitFor(() => screen.getByText('Guy')));
 
     expect(viewSettings['ttsVoice']).toBe('guy');
     expect(viewSettings['ttsUseNarration']).toBe(false);
   });
 
-  test('a book without narration never writes the narration preference', async () => {
+  test('a book without narration has no voice picker', async () => {
     const props = makeProps();
     render(<TTSPlayerSheet {...props} />);
-    fireEvent.click(screen.getByLabelText('Voice'));
-    fireEvent.click(await waitFor(() => screen.getByText('Guy')));
-
-    expect(viewSettings['ttsVoice']).toBe('guy');
+    await waitFor(() => expect(screen.queryByLabelText('Voice')).toBeNull());
     expect(viewSettings['ttsUseNarration']).toBeUndefined();
   });
 
   test('reopening the sheet returns to the main view', async () => {
-    const props = makeProps();
+    const props = makeProps({ onGetVoices: vi.fn().mockResolvedValue(narrationGroups) });
     const { rerender } = render(<TTSPlayerSheet {...props} />);
-    fireEvent.click(screen.getByLabelText('Voice'));
+    fireEvent.click(await waitFor(() => screen.getByLabelText('Voice')));
     expect(await waitFor(() => screen.getByText('Guy'))).toBeTruthy();
     rerender(<TTSPlayerSheet {...props} isOpen={false} />);
     rerender(<TTSPlayerSheet {...props} isOpen={true} />);

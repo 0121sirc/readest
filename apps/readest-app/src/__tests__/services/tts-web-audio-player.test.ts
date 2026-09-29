@@ -58,15 +58,31 @@ describe('WebAudioPlayer scheduling', () => {
     expect(ctx.sources).toHaveLength(0);
     expect(events).toHaveLength(0);
   });
+
+  test('reports chunk-start for the first chunk scheduled after an audio gap', async () => {
+    const { ctx, player, events, onEvent } = setup();
+    await player.ensureContext();
+    const gen = player.startSession(onEvent);
+    player.scheduleChunk(gen, makeBuffer(1), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
+    // Play the lone chunk to completion with no successor scheduled.
+    await ctx.advanceTo(SAFETY + 1 + 0.01);
+    events.length = 0;
+    // Resuming after the gap: this chunk is the next to sound, so its boundary
+    // must be reported at schedule time — an onended report is impossible
+    // because the previous chunk already ended.
+    player.scheduleChunk(gen, makeBuffer(1), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
+    expect(events).toEqual([{ type: 'chunk-start', chunkIndex: 1 }]);
+  });
 });
 
 describe('WebAudioPlayer backpressure', () => {
-  test('third chunk waits until the first finishes while visible', async () => {
+  test('scheduling waits once the visible pending-chunk budget is reached', async () => {
     const { ctx, player, onEvent } = setup();
     await player.ensureContext();
     const gen = player.startSession(onEvent);
-    player.scheduleChunk(gen, makeBuffer(2), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
-    player.scheduleChunk(gen, makeBuffer(2), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
+    for (let i = 0; i < 6; i++) {
+      player.scheduleChunk(gen, makeBuffer(2), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
+    }
     let resolved: boolean | null = null;
     const wait = player.waitUntilReady(gen).then((r) => {
       resolved = r;
@@ -78,15 +94,23 @@ describe('WebAudioPlayer backpressure', () => {
     expect(await wait).toBe(true);
   });
 
-  test('hidden visibility deepens the pending-chunk budget to 5', async () => {
+  test('hidden visibility deepens the pending-chunk budget', async () => {
     setVisibility('hidden');
-    const { player, onEvent } = setup();
+    const { ctx, player, onEvent } = setup();
     await player.ensureContext();
     const gen = player.startSession(onEvent);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
       player.scheduleChunk(gen, makeBuffer(1), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
     }
-    expect(await player.waitUntilReady(gen)).toBe(true);
+    let resolved: boolean | null = null;
+    const wait = player.waitUntilReady(gen).then((r) => {
+      resolved = r;
+      return r;
+    });
+    await Promise.resolve();
+    expect(resolved).toBeNull();
+    await ctx.advanceTo(SAFETY + 1);
+    expect(await wait).toBe(true);
   });
 
   test('seconds cap blocks scheduling far ahead even under the chunk budget', async () => {
@@ -239,7 +263,7 @@ describe('WebAudioPlayer abort', () => {
     const { ctx, player, events, onEvent } = setup();
     await player.ensureContext();
     const gen = player.startSession(onEvent);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       player.scheduleChunk(gen, makeBuffer(2), { trimStartSec: 0, mediaScale: 1, gapSec: 0 });
     }
     const wait = player.waitUntilReady(gen);

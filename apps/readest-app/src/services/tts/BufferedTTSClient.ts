@@ -597,6 +597,15 @@ export class BufferedTTSClient implements TTSClient {
     const chunkMeta: ChunkMeta[] = [];
     this.#chunkMeta = chunkMeta;
     const events = new AsyncQueue<SpeakQueueEvent>();
+    // Sentence boundaries are reported exactly once per scheduled chunk,
+    // whichever source notices first: the player's own chunk-start events, or
+    // the audio-clock watcher below.
+    const reported = new Set<number>();
+    const report = (index: number) => {
+      if (reported.has(index)) return;
+      reported.add(index);
+      events.push({ kind: 'chunk-start', index });
+    };
     let produceDone = false;
     let aborted = false;
 
@@ -621,7 +630,7 @@ export class BufferedTTSClient implements TTSClient {
     const generation = this.#player.startSession(
       (event) => {
         if (event.type === 'chunk-start') {
-          events.push({ kind: 'chunk-start', index: event.chunkIndex });
+          report(event.chunkIndex);
         } else if (event.type === 'session-end') {
           events.push({ kind: 'session-end' });
         } else {
@@ -638,6 +647,23 @@ export class BufferedTTSClient implements TTSClient {
       return;
     }
     this.#isPlaying = true;
+
+    // While the page is visible, follow the audio clock instead of relying on
+    // onended ordering: a stalled main thread (decode, highlight/CFI work)
+    // delays onended and would otherwise let the sentence highlight drift
+    // behind the voice until the next stall drains the backlog. rAF pauses
+    // while hidden, where the player's own chunk-start events remain the
+    // source (see scheduleChunk's post-gap report).
+    let watcherRaf: number | null = null;
+    const watch = () => {
+      if (aborted || this.#activeGeneration !== generation) return;
+      const pos = this.#player.getPlaybackPosition(generation);
+      if (pos) report(pos.chunkIndex);
+      watcherRaf = requestAnimationFrame(watch);
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      watcherRaf = requestAnimationFrame(watch);
+    }
 
     // Producer: synthesize sentence p in order once there is buffer room.
     const producer = (async () => {
@@ -705,16 +731,10 @@ export class BufferedTTSClient implements TTSClient {
           if (!entry) break;
           if (entry.kind === 'skip') continue;
 
-          // Keep at least two chunks buffered ahead: only when fewer than two
-          // remain does the consumer hold off and wait for a refill (surfaced as
-          // "buffering"). Above that it schedules straight through.
-          const MIN_BUFFERED = 2;
-          if (buffers.size < MIN_BUFFERED && !produceDone && c + 1 < sentences.length) {
-            this.#queueBuffering = true;
-            while (buffers.size < MIN_BUFFERED && !produceDone && !aborted) await waitWake();
-            if (aborted || this.#activeGeneration !== generation) return;
-            this.#queueBuffering = false;
-          }
+          // Schedule each sentence as soon as it is ready. An artificial
+          // "keep N buffered ahead" hold only empties the audio graph and lets
+          // a slow producer turn into an audible gap; the player's own pending
+          // budget and seconds cap already bound how far ahead we run.
 
           const ready = await this.#player.waitUntilReady(generation);
           if (!ready || aborted) return;
@@ -794,6 +814,7 @@ export class BufferedTTSClient implements TTSClient {
       }
     } finally {
       aborted = true;
+      if (watcherRaf !== null) cancelAnimationFrame(watcherRaf);
       wake();
       signal.removeEventListener('abort', onAbort);
       this.#queueWake = null;

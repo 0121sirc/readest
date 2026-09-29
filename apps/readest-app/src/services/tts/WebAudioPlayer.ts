@@ -104,9 +104,14 @@ interface PlayerSession {
 // currentTime and the schedule call.
 const SCHEDULE_SAFETY_SEC = 0.03;
 // Screen-off JS throttling must not starve the queue between onended and the
-// next schedule, so the pending budget deepens when the page is hidden.
-const MAX_PENDING_VISIBLE = 2;
-const MAX_PENDING_HIDDEN = 5;
+// next schedule, so the pending budget deepens when the page is hidden. Both
+// budgets are deliberately several chunks deep: the next chunk is scheduled
+// from the previous one's onended callback, so a shallow queue turns any
+// main-thread jank (decode, highlight/CFI work) into an audible gap. Marks are
+// dispatched on chunk-start, not at schedule time, so depth cannot desync the
+// highlight.
+const MAX_PENDING_VISIBLE = 6;
+const MAX_PENDING_HIDDEN = 8;
 // Bounds decoded PCM at slow rates (0.2x stretches a 30s sentence to 150s).
 const MAX_AHEAD_SEC = 60;
 
@@ -269,6 +274,12 @@ export class WebAudioPlayer implements TTSAudioPlayer {
     const ctx = this.#ctx;
     if (!session || session.generation !== generation || !ctx) return;
     const start = Math.max(session.nextStartTime, ctx.currentTime + SCHEDULE_SAFETY_SEC);
+    // Nothing before this chunk is still sounding, so this one is the next to
+    // become audible (session start, or the first chunk after an audio gap).
+    // Its chunk-start is reported at schedule time; otherwise the previous
+    // chunk's onended reports it, which keeps the boundary alive even when
+    // rAF/timers are throttled with the screen off.
+    const hasEarlierPending = session.chunks.some((c) => !c.ended);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
@@ -287,8 +298,8 @@ export class WebAudioPlayer implements TTSAudioPlayer {
     console.log(
       `[TTS] schedule ${generation}:${chunk.index} at ${start.toFixed(2)} dur ${buffer.duration.toFixed(2)}`,
     );
-    if (chunk.index === 0) {
-      session.onEvent({ type: 'chunk-start', chunkIndex: 0 });
+    if (!hasEarlierPending) {
+      session.onEvent({ type: 'chunk-start', chunkIndex: chunk.index });
     }
   }
 

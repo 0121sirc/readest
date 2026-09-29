@@ -96,6 +96,30 @@ describe('OpenAISpeechProvider', () => {
     expect(getOpenAITTSConfig().voices).toBe('bfy,rxd');
   });
 
+  test('keeps a manually entered voice when the server advertises its own list', async () => {
+    setOpenAITTSConfig({
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      model: '',
+      voices: 'zh-CN-XiaoxiaoNeural',
+      lookahead: 3,
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ voices: [{ id: 'alloy' }, { id: 'nova' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ) as unknown as typeof fetch;
+
+    const provider = new OpenAISpeechProvider();
+    const voices = await provider.getAllVoices();
+    // The configured voice stays selectable (and default); server voices append.
+    expect(voices.map((v) => v.id)).toEqual(['zh-CN-XiaoxiaoNeural', 'alloy', 'nova']);
+    expect(provider.pickDefaultVoice(voices)).toBe('zh-CN-XiaoxiaoNeural');
+    // A hand-entered voice must not be clobbered by the fetched list.
+    expect(getOpenAITTSConfig().voices).toBe('zh-CN-XiaoxiaoNeural');
+  });
+
   test('falls back to the cached voice list when the server list fails', async () => {
     setOpenAITTSConfig({
       baseUrl: 'https://api.openai.com/v1',

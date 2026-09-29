@@ -80,6 +80,10 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     setOpenAITTSConfig(next);
   };
 
+  // Base for the voice-name discovery hint; literal placeholder until the user
+  // fills a Base URL.
+  const voiceBase = openaiTTSConfig.baseUrl.trim().replace(/\/+$/, '') || '<BASE_URL>';
+
   const showToast = useCallback(
     (type: 'info' | 'error', message: string) => {
       eventDispatcher.dispatch('toast', { type, message });
@@ -339,20 +343,9 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
       </BoxedList>
 
       <BoxedList title={_('Custom OpenAI TTS')} data-setting-id='settings.tts.openai'>
-        {/* Base URL + Test */}
+        {/* Base URL */}
         <div className='flex flex-col gap-2 py-3 pe-4'>
-          <div className='flex w-full items-center justify-between'>
-            <SettingLabel>{_('Base URL')}</SettingLabel>
-            <button
-              type='button'
-              className='btn btn-xs btn-contrast eink-bordered inline-flex items-center gap-1'
-              onClick={testOpenAITTS}
-              disabled={openaiTesting || !openaiTTSConfig.baseUrl.trim()}
-            >
-              {openaiTesting && <PiSpinner className='size-3.5 animate-spin' />}
-              {_('Test')}
-            </button>
-          </div>
+          <SettingLabel>{_('Base URL')}</SettingLabel>
           <input
             type='url'
             className='input input-sm bg-base-100 text-base-content w-full'
@@ -385,6 +378,32 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
             placeholder={_('Optional')}
             onChange={(event) => updateOpenAITTSConfig({ model: event.target.value })}
           />
+        </div>
+
+        {/* Voice */}
+        <div className='flex flex-col gap-2 py-3 pe-4'>
+          <div className='flex w-full items-center justify-between'>
+            <SettingLabel>{_('Voice')}</SettingLabel>
+            <button
+              type='button'
+              className='btn btn-xs btn-contrast eink-bordered inline-flex items-center gap-1'
+              onClick={testOpenAITTS}
+              disabled={openaiTesting || !openaiTTSConfig.baseUrl.trim()}
+            >
+              {openaiTesting && <PiSpinner className='size-3.5 animate-spin' />}
+              {_('Test')}
+            </button>
+          </div>
+          <input
+            type='text'
+            className='input input-sm bg-base-100 text-base-content w-full'
+            value={openaiTTSConfig.voices}
+            placeholder='default'
+            onChange={(event) => updateOpenAITTSConfig({ voices: event.target.value })}
+          />
+          <p className='text-base-content/60 text-xs break-words'>
+            {`语音名称请访问 ${voiceBase}/voices?language=zh-CN 或 ${voiceBase}/voices 获取`}
+          </p>
         </div>
 
         {/* Pre-synthesis look-ahead */}
