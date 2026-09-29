@@ -1,14 +1,21 @@
 import { mergeBookshelfStates } from '@/services/bookshelves/state';
 import type { Configuration, FileEntry, ZipWriter } from '@zip.js/zip.js';
-import { AppService, FileItem } from '@/types/system';
+import { AppService, BaseDir, FileItem } from '@/types/system';
 import { EXTS } from '@/libs/document';
 import { isTauriAppPlatform } from '@/services/environment';
 import { Book, BookConfig, BookNote } from '@/types/book';
 import { SystemSettings } from '@/types/settings';
-import { getBookDirOfPath, getLibraryFilename } from '@/utils/book';
+import { getBookDirOfPath, getLibraryFilename, isBookFile } from '@/utils/book';
 import { getAbsOfflineDir } from '@/utils/audiobook';
 import { stampBookConfigSchema } from '@/utils/serializer';
 import { configureZip } from '@/utils/zip';
+import {
+  STATS_SNAPSHOT_FILENAME,
+  exportStatsSnapshot,
+  importStatsSnapshot,
+  isEmptyStatsSnapshot,
+  type StatsSnapshot,
+} from '@/services/statistics/statsSnapshot';
 
 /** Book file extensions for identifying book files in backup directories. */
 const BOOK_EXTS = new Set(Object.values(EXTS));
@@ -21,6 +28,57 @@ const isAbsOfflineEntry = (entryName: string): boolean => {
 /** Root-level zip entry name for the backed-up global settings snapshot. */
 export const SETTINGS_BACKUP_FILENAME = 'settings.json';
 
+/** Root-level zip entry name for the sync-snapshot manifest. */
+export const SNAPSHOT_MANIFEST_FILENAME = 'manifest.json';
+export const SNAPSHOT_FORMAT = 'readest-sync';
+export const SNAPSHOT_VERSION = 1;
+
+/**
+ * Asset directories folded into a sync snapshot. Entries are stored at the
+ * root of the zip prefixed with the BaseDir name (`Dictionaries/…`,
+ * `Fonts/…`, `Images/…`) so a native extract with `destDir` = the app data
+ * root (`BaseDir 'Data'`) lands them exactly where the app reads them.
+ */
+export const SNAPSHOT_ASSET_BASES = ['Dictionaries', 'Fonts', 'Images'] as const;
+export type SnapshotAssetBase = (typeof SNAPSHOT_ASSET_BASES)[number];
+
+/** Base dirs whose per-file paths can be prefixed in a snapshot zip. */
+const SNAPSHOT_FILE_BASES: readonly BaseDir[] = ['Books', ...SNAPSHOT_ASSET_BASES];
+
+/** Reverse of {@link SNAPSHOT_FILE_BASES}: zip prefix → BaseDir. */
+const snapshotBaseOfEntry = (entryName: string): BaseDir | null => {
+  for (const base of SNAPSHOT_FILE_BASES) {
+    if (entryName.startsWith(`${base}/`)) return base;
+  }
+  return null;
+};
+
+/**
+ * Book fields that describe THIS device's copy and must never be exported in
+ * a portable snapshot. A peer that adopts a foreign `filePath` reads the row
+ * as a purely-local book and can then delete the "missing" book cloud-and-
+ * device (see #5084 / `wire.ts:stripDeviceLocalFields`). Download stamps are
+ * kept: the snapshot carries the files themselves when `includeBookFiles` is
+ * on, and a device without the bytes re-derives availability from disk.
+ */
+const SNAPSHOT_STRIP_BOOK_FIELDS = ['filePath', 'altFilePaths', 'coverImageUrl'] as const;
+
+/**
+ * Manifest written at the root of a whole-sync snapshot. Its presence (and
+ * `format`) is what tells the importer this is a snapshot rather than a
+ * legacy library backup, and it records which optional sections the exporter
+ * actually produced.
+ */
+export interface SnapshotManifest {
+  format: typeof SNAPSHOT_FORMAT;
+  version: number;
+  exportedAt: number;
+  includeBookFiles: boolean;
+  includeAssets: boolean;
+  includeStats: boolean;
+  counts: { books: number; files: number; assets: number; statEvents: number };
+}
+
 /**
  * Options controlling what a backup zip includes.
  */
@@ -31,7 +89,38 @@ export interface BackupOptions {
    * defaults to false.
    */
   includeCredentials?: boolean;
+  /**
+   * Produce a whole-sync snapshot: write `manifest.json`, fold in the custom
+   * asset bundles and reading statistics, and prefix file entries with their
+   * BaseDir so the archive is reconstructable without a sync server.
+   */
+  snapshot?: boolean;
+  /**
+   * Include the book content files themselves. Book sidecars (`config.json`,
+   * `nav.json`, `cover.png`, TTS packs) are always included. Defaults to true.
+   */
+  includeBookFiles?: boolean;
+  /** Include custom dictionary / font / texture bundles. Snapshot only; defaults to true. */
+  includeAssets?: boolean;
+  /** Include reading statistics. Snapshot only; defaults to true. */
+  includeStats?: boolean;
 }
+
+interface ResolvedBackupOptions {
+  includeCredentials: boolean;
+  snapshot: boolean;
+  includeBookFiles: boolean;
+  includeAssets: boolean;
+  includeStats: boolean;
+}
+
+const resolveBackupOptions = (options: BackupOptions): ResolvedBackupOptions => ({
+  includeCredentials: options.includeCredentials ?? false,
+  snapshot: options.snapshot ?? false,
+  includeBookFiles: options.includeBookFiles ?? true,
+  includeAssets: options.snapshot ? (options.includeAssets ?? true) : false,
+  includeStats: options.snapshot ? (options.includeStats ?? true) : false,
+});
 
 /**
  * SystemSettings dot-paths excluded from backups. Each is either tied to
@@ -189,9 +278,63 @@ const deepMerge = (
 };
 
 /**
+ * Union-merge two arrays of user-authored records by a stable identity key,
+ * keeping the newer side on conflict. Used for the settings arrays that back
+ * the imported assets / integrations so a snapshot import never drops a
+ * record the device already has (`deepMerge` would replace whole arrays).
+ *
+ * Tombstones win even when they are not "newer": a snapshot deletion must
+ * propagate the same way it does through replica sync.
+ */
+function mergeByIdentity<T>(
+  current: readonly T[] | undefined,
+  backup: readonly T[] | undefined,
+  keyOf: (item: T) => string | undefined,
+  stampOf: (item: T) => number,
+): T[] {
+  const cur = current ?? [];
+  const bak = backup ?? [];
+  if (bak.length === 0) return [...cur];
+  const out: T[] = [...cur];
+  const index = new Map<string, number>();
+  cur.forEach((item, i) => {
+    const key = keyOf(item);
+    if (key) index.set(key, i);
+  });
+  const deletedAtOf = (item: T): number | null => {
+    const value = (item as { deletedAt?: number | null }).deletedAt;
+    return value == null ? null : value;
+  };
+  for (const item of bak) {
+    const key = keyOf(item);
+    if (!key) {
+      out.push(item);
+      continue;
+    }
+    const existingIndex = index.get(key);
+    if (existingIndex === undefined) {
+      index.set(key, out.length);
+      out.push(item);
+      continue;
+    }
+    const existing = out[existingIndex]!;
+    const backupDeleted = deletedAtOf(item) !== null;
+    const existingDeleted = deletedAtOf(existing) !== null;
+    if (backupDeleted !== existingDeleted) {
+      if (backupDeleted) out[existingIndex] = item;
+      continue;
+    }
+    if (stampOf(item) > stampOf(existing)) out[existingIndex] = item;
+  }
+  return out;
+}
+
+/**
  * Merge a restored settings snapshot onto the current device settings.
  * Blacklisted fields are absent from the snapshot, so the current
- * device's values for them are preserved. Neither input is mutated.
+ * device's values for them are preserved. User-authored arrays are
+ * union-merged by identity (see {@link mergeByIdentity}) rather than
+ * replaced; neither input is mutated.
  */
 export function mergeRestoredSettings(
   current: SystemSettings,
@@ -203,6 +346,36 @@ export function mergeRestoredSettings(
   ) as unknown as SystemSettings;
   if (current.bookshelves || backup.bookshelves)
     merged.bookshelves = mergeBookshelfStates(current.bookshelves, backup.bookshelves);
+  merged.customDictionaries = mergeByIdentity(
+    current.customDictionaries,
+    backup.customDictionaries,
+    (d) => d.contentId ?? d.id,
+    (d) => d.addedAt ?? 0,
+  );
+  merged.customFonts = mergeByIdentity(
+    current.customFonts,
+    backup.customFonts,
+    (f) => f.contentId ?? f.id,
+    (f) => f.downloadedAt ?? 0,
+  );
+  merged.customTextures = mergeByIdentity(
+    current.customTextures,
+    backup.customTextures,
+    (t) => t.contentId ?? t.id,
+    (t) => t.downloadedAt ?? 0,
+  );
+  merged.opdsCatalogs = mergeByIdentity(
+    current.opdsCatalogs,
+    backup.opdsCatalogs,
+    (c) => c.contentId ?? c.id,
+    (c) => c.addedAt ?? 0,
+  );
+  merged.absServers = mergeByIdentity(
+    current.absServers,
+    backup.absServers,
+    (s) => s.contentId ?? s.id,
+    (s) => s.addedAt ?? 0,
+  );
   return merged;
 }
 
@@ -291,25 +464,64 @@ export function reviveRestoredBooks(revived: RevivedBook[], now: number = Date.n
 
 type ProgressCallback = (current: number, total: number, filename: string) => void;
 
-interface BackupPlan {
-  /** Small JSON entries: the canonical library.json and sanitized settings.json. */
-  texts: { name: string; content: string }[];
-  /** Book files, `file.path` relative to the Books dir, `entryName` with forward slashes. */
-  files: { file: FileItem; entryName: string }[];
+interface PlannedFile {
+  /** `file.path` is relative to `base`; `entryName` uses forward slashes. */
+  file: FileItem;
+  entryName: string;
+  base: BaseDir;
 }
+
+interface BackupPlan {
+  /** Small JSON entries: library.json, settings.json, optional manifest/statistics. */
+  texts: { name: string; content: string }[];
+  files: PlannedFile[];
+}
+
+/** Strip a book's device-local fields for a portable snapshot export. */
+const stripSnapshotBookFields = (book: Book): Book => {
+  const copy = { ...book };
+  for (const field of SNAPSHOT_STRIP_BOOK_FIELDS) delete copy[field];
+  return copy;
+};
+
+/**
+ * Recursively list a base dir's files. `file.path` keeps the host separator
+ * (a Windows `readDirectory` hands back `hash\cover.png`); callers derive
+ * forward-slash zip entry names from it while `readFile`/progress use the
+ * raw path, exactly as the pre-snapshot code did.
+ */
+async function listBaseFiles(appService: AppService, base: BaseDir): Promise<FileItem[]> {
+  try {
+    const dir = await appService.resolveFilePath('', base);
+    return await appService.readDirectory(dir, 'None');
+  } catch (error) {
+    console.warn(`Skipping ${base} backup:`, error);
+    return [];
+  }
+}
+
+/** `file.path` normalized to forward slashes for a zip entry name. */
+const entryPathOf = (file: FileItem): string => file.path.replace(/\\/g, '/');
 
 /**
  * Plan the archive: which entries a backup holds and what they are named.
  * Shared by the in-memory zip.js writer (web) and the native writer (Tauri).
+ *
+ * Legacy backups store book files as `<hash>/…`; sync snapshots prefix every
+ * file with its BaseDir (`Books/<hash>/…`, `Dictionaries/<bundle>/…`, …) so a
+ * native extract rooted at the app data dir lands each file in place.
  */
 async function collectBackupEntries(
   appService: AppService,
   options: BackupOptions,
 ): Promise<BackupPlan> {
-  // Generate canonical library.json from the current storage backend
+  const opts = resolveBackupOptions(options);
+  // Generate canonical library.json from the current storage backend. A
+  // snapshot strips device-local fields so the archive is portable.
   const books = await appService.loadLibraryBooks();
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const libraryBooks = books.map(({ coverImageUrl, ...rest }) => rest);
+  const libraryBooks = opts.snapshot
+    ? books.map(stripSnapshotBookFields)
+    : books.map(({ coverImageUrl: _coverImageUrl, ...rest }) => rest);
   const texts = [{ name: getLibraryFilename(), content: JSON.stringify(libraryBooks, null, 2) }];
 
   // Add the global settings snapshot, sanitized of device-specific and
@@ -335,21 +547,65 @@ async function collectBackupEntries(
     const dir = getBookDirOfPath(path);
     return !!dir && (books.length === 0 || liveHashes.has(dir));
   };
-  const booksDir = await appService.resolveFilePath('', 'Books');
-  const files = await appService.readDirectory(booksDir, 'None');
-  // `readDirectory` returns host-separator paths; on Windows that is a
-  // backslash (e.g. `hash\cover.png`). Zip entry names must use forward
-  // slashes so the backup restores on every platform — restore matches a
-  // book's files by `${hash}/` (see `restoreFromBackupZip`). Issue #4703.
-  const bookFiles = files
+  const bookFiles: PlannedFile[] = (await listBaseFiles(appService, 'Books'))
     .filter((file) => file.size > 0 && isExported(file.path))
-    .map((file) => ({ file, entryName: file.path.replace(/\\/g, '/') }))
     // Offline Audiobookshelf audio (#6256) is re-downloadable and can run to
     // gigabytes, each file read into memory here.
-    .filter(({ entryName }) => !isAbsOfflineEntry(entryName))
+    .filter((file) => !isAbsOfflineEntry(entryPathOf(file)))
     // A restore killed mid-file leaves its `.part` temp file behind.
-    .filter(({ entryName }) => !entryName.endsWith('.part'));
-  return { texts, files: bookFiles };
+    .filter((file) => !file.path.endsWith('.part'))
+    // The book content can be excluded; sidecars (config/nav/cover/tts) stay.
+    .filter((file) => opts.includeBookFiles || !isBookFile(file.path))
+    .map((file) => ({
+      file,
+      base: 'Books',
+      entryName: opts.snapshot ? `Books/${entryPathOf(file)}` : entryPathOf(file),
+    }));
+
+  // Custom asset bundles (dictionaries / fonts / textures). Their metadata
+  // rides settings.json; the binaries are what a fresh device cannot rebuild.
+  const assetFiles: PlannedFile[] = [];
+  if (opts.includeAssets) {
+    for (const base of SNAPSHOT_ASSET_BASES) {
+      const files = (await listBaseFiles(appService, base)).filter(
+        (file) => file.size > 0 && !file.path.endsWith('.part'),
+      );
+      for (const file of files) {
+        assetFiles.push({ file, base, entryName: `${base}/${entryPathOf(file)}` });
+      }
+    }
+  }
+
+  let statsSnapshot: StatsSnapshot | null = null;
+  if (opts.includeStats) {
+    statsSnapshot = await exportStatsSnapshot(appService);
+  }
+  if (!isEmptyStatsSnapshot(statsSnapshot)) {
+    texts.push({ name: STATS_SNAPSHOT_FILENAME, content: JSON.stringify(statsSnapshot) });
+  }
+
+  if (opts.snapshot) {
+    const manifest: SnapshotManifest = {
+      format: SNAPSHOT_FORMAT,
+      version: SNAPSHOT_VERSION,
+      exportedAt: Date.now(),
+      includeBookFiles: opts.includeBookFiles,
+      includeAssets: opts.includeAssets,
+      includeStats: opts.includeStats,
+      counts: {
+        books: liveHashes.size,
+        files: bookFiles.length,
+        assets: assetFiles.length,
+        statEvents: statsSnapshot?.events.length ?? 0,
+      },
+    };
+    texts.unshift({
+      name: SNAPSHOT_MANIFEST_FILENAME,
+      content: JSON.stringify(manifest, null, 2),
+    });
+  }
+
+  return { texts, files: [...bookFiles, ...assetFiles] };
 }
 
 /**
@@ -370,10 +626,10 @@ export async function addBackupEntriesToZip(
 
   const total = files.length;
   for (let i = 0; i < files.length; i++) {
-    const { file, entryName } = files[i]!;
+    const { file, entryName, base } = files[i]!;
     onProgress?.(i + 1, total, file.path);
     try {
-      const content = await appService.readFile(file.path, 'Books', 'binary');
+      const content = await appService.readFile(file.path, base, 'binary');
       const data = new Uint8Array(content as ArrayBuffer);
       await writer.add(entryName, new Uint8ArrayReader(data), { level: 0 });
     } catch (error) {
@@ -438,14 +694,18 @@ export async function createBackupZipToFile(
   options: BackupOptions = {},
   onProgress?: ProgressCallback,
 ): Promise<void> {
+  const opts = resolveBackupOptions(options);
   const { texts, files } = await collectBackupEntries(appService, options);
-  const srcDir = await appService.resolveFilePath('', 'Books');
-  // A file entry's name is also its path under srcDir (forward slashes; the
-  // writer joins them, so host separators never reach it).
+  // Snapshot entry names are prefixed with their BaseDir, so the whole archive
+  // is read relative to the app data root (`Data` = the parent of Books/Fonts/
+  // Images/Dictionaries). Legacy backups keep the flat `<hash>/…` names under
+  // the Books dir. A file entry's name is also its path under srcDir (forward
+  // slashes; the writer joins them, so host separators never reach it).
+  const srcDir = await appService.resolveFilePath('', opts.snapshot ? 'Data' : 'Books');
   const entries = [...texts, ...files.map(({ entryName }) => ({ name: entryName }))];
   try {
-    // The writer reports every entry; the dialog's contract counts book files
-    // only and echoes their on-disk path (same as the zip.js writer below).
+    // The writer reports every entry; the dialog's contract counts file
+    // entries only and echoes their on-disk path (same as the zip.js writer).
     await invokeZipCommand('write_backup_zip', { dest: filePath, srcDir, entries }, (current) => {
       const index = current - texts.length - 1;
       const file = files[index];
@@ -490,6 +750,12 @@ export function validateBackupStructure(entryNames: string[]): boolean {
  * - Add new books not present in current library
  * - Import orphan hash directories not listed in library.json
  * - Restore global settings (settings.json), deep-merged onto current
+ *
+ * A whole-sync snapshot (`manifest.json` present) additionally restores the
+ * custom asset bundles (dictionaries/fonts/textures) and reading statistics.
+ * Snapshot file entries are prefixed with their BaseDir, so both the native
+ * extractor (`destDir` = the app data root) and the JS fallback place them
+ * correctly.
  */
 export async function restoreFromBackupZip(
   appService: AppService,
@@ -514,6 +780,42 @@ export async function restoreFromBackupZip(
   // Filter to file entries only (directories don't have getData)
   const fileEntries = entries.filter((e) => !e.directory);
 
+  // Detect a whole-sync snapshot. Its entries are BaseDir-prefixed; legacy
+  // backups keep flat `<hash>/…` book names.
+  const manifestEntry = fileEntries.find((e) => e.filename === SNAPSHOT_MANIFEST_FILENAME);
+  let isSnapshot = false;
+  if (manifestEntry) {
+    try {
+      const raw = await manifestEntry.getData!(new Uint8ArrayWriter());
+      const manifest = JSON.parse(new TextDecoder().decode(raw)) as SnapshotManifest;
+      if (manifest.format !== SNAPSHOT_FORMAT || manifest.version > SNAPSHOT_VERSION) {
+        throw new Error(`unsupported snapshot version: ${manifest.version}`);
+      }
+      isSnapshot = true;
+    } catch (error) {
+      await reader.close();
+      throw new Error(`Invalid sync snapshot manifest: ${String(error)}`);
+    }
+  }
+
+  // `snapshotBaseOfEntry` maps a snapshot entry to its BaseDir. For a legacy
+  // backup every file belongs to Books and keeps its raw name.
+  const baseOfEntry = (name: string): BaseDir =>
+    (isSnapshot ? snapshotBaseOfEntry(name) : 'Books') ?? 'Books';
+  const relOfEntry = (name: string): string => {
+    const base = baseOfEntry(name);
+    return isSnapshot && name.startsWith(`${base}/`) ? name.slice(base.length + 1) : name;
+  };
+  const isAssetEntry = (name: string): boolean => {
+    const base = snapshotBaseOfEntry(name);
+    return base !== null && base !== 'Books';
+  };
+  const isControlEntry = (name: string): boolean =>
+    name === SNAPSHOT_MANIFEST_FILENAME ||
+    name === STATS_SNAPSHOT_FILENAME ||
+    name === SETTINGS_BACKUP_FILENAME ||
+    name === getLibraryFilename();
+
   // Read backup library.json
   const libraryEntry = fileEntries.find((e) => e.filename === getLibraryFilename());
   if (!libraryEntry) {
@@ -531,13 +833,18 @@ export async function restoreFromBackupZip(
     currentBooksMap.set(book.hash, book);
   }
 
+  const bookEntries = fileEntries.filter(
+    (e) => !isControlEntry(e.filename) && !isAssetEntry(e.filename),
+  );
+  const assetEntries = fileEntries.filter((e) => isAssetEntry(e.filename));
+
   // Collect orphan hash directories: in zip but not in library.json
   const backupHashes = new Set(backupBooks.map((b) => b.hash));
   const orphanHashes = new Set<string>();
-  for (const entry of fileEntries) {
-    const slashIdx = entry.filename.indexOf('/');
+  for (const entry of bookEntries) {
+    const slashIdx = relOfEntry(entry.filename).indexOf('/');
     if (slashIdx < 0) continue;
-    const dir = entry.filename.slice(0, slashIdx);
+    const dir = relOfEntry(entry.filename).slice(0, slashIdx);
     if (dir && !backupHashes.has(dir)) {
       orphanHashes.add(dir);
     }
@@ -549,21 +856,25 @@ export async function restoreFromBackupZip(
   // Plan first so progress can count the whole job: the config.json of a
   // book already in the library is merged in JS, every other entry is
   // extracted in one pass, then orphan books are imported from disk.
-  const configMerges: FileEntry[] = [];
+  const configMerges: { entry: FileEntry; rel: string }[] = [];
   const bulkEntries: FileEntry[] = [];
-  const orphanImports: FileEntry[] = [];
+  const orphanImports: { entry: FileEntry; rel: string }[] = [];
 
   for (const backupBook of backupBooks) {
     const existingBook = currentBooksMap.get(backupBook.hash);
     const bookDir = backupBook.hash;
 
-    // Get all file entries for this book's directory
-    const bookFileEntries = fileEntries.filter((e) => e.filename.startsWith(`${bookDir}/`));
+    // Get all file entries for this book's directory (BaseDir-relative).
+    const bookFileEntries = bookEntries.filter((e) =>
+      relOfEntry(e.filename).startsWith(`${bookDir}/`),
+    );
 
     if (existingBook) {
       // Update: override book file and cover, merge config
       for (const entry of bookFileEntries) {
-        (entry.filename.endsWith('/config.json') ? configMerges : bulkEntries).push(entry);
+        const rel = relOfEntry(entry.filename);
+        if (rel.endsWith('/config.json')) configMerges.push({ entry, rel });
+        else bulkEntries.push(entry);
       }
 
       // Merge book metadata (timestamps, deletedAt reconciliation). A book
@@ -588,7 +899,7 @@ export async function restoreFromBackupZip(
   // Orphan directories: hash dirs in zip not listed in library.json.
   for (const hash of orphanHashes) {
     if (currentBooksMap.has(hash)) continue;
-    const orphanEntries = fileEntries.filter((e) => e.filename.startsWith(`${hash}/`));
+    const orphanEntries = bookEntries.filter((e) => relOfEntry(e.filename).startsWith(`${hash}/`));
     // Find the book file by extension
     const bookEntry = orphanEntries.find((e) => {
       const ext = e.filename.split('.').pop()?.toLowerCase() ?? '';
@@ -599,8 +910,11 @@ export async function restoreFromBackupZip(
       await appService.createDir(hash, 'Books');
     }
     bulkEntries.push(...orphanEntries);
-    orphanImports.push(bookEntry);
+    orphanImports.push({ entry: bookEntry, rel: relOfEntry(bookEntry.filename) });
   }
+
+  // Asset bundles are plain binary copies — no config merge, no orphan import.
+  bulkEntries.push(...assetEntries);
 
   const total = configMerges.length + bulkEntries.length + orphanImports.length;
   let done = 0;
@@ -608,41 +922,51 @@ export async function restoreFromBackupZip(
 
   // Merged configs are written only once the book files they describe are
   // on disk, so a failed extraction leaves the current configs untouched.
-  const mergedConfigs: { filename: string; json: string }[] = [];
-  for (const entry of configMerges) {
+  const mergedConfigs: { rel: string; json: string }[] = [];
+  for (const { entry, rel } of configMerges) {
     tick(entry.filename);
     const data = await entry.getData!(new Uint8ArrayWriter());
     let currentConfig: Partial<BookConfig> = {};
     try {
-      const str = (await appService.readFile(entry.filename, 'Books', 'text')) as string;
+      const str = (await appService.readFile(rel, 'Books', 'text')) as string;
       currentConfig = JSON.parse(str);
     } catch {
       /* use empty config if current doesn't exist */
     }
     const backupConfig: Partial<BookConfig> = JSON.parse(new TextDecoder().decode(data));
     const mergedConfig = mergeBookConfigs(currentConfig, backupConfig);
-    mergedConfigs.push({ filename: entry.filename, json: JSON.stringify(mergedConfig) });
+    mergedConfigs.push({ rel, json: JSON.stringify(mergedConfig) });
   }
 
-  await extractEntries(appService, bulkEntries, source, (current, _bulkTotal, name) => {
-    onProgress?.(configMerges.length + current, total, name);
-  });
+  await extractEntries(
+    appService,
+    bulkEntries,
+    source,
+    (current, _bulkTotal, name) => {
+      onProgress?.(configMerges.length + current, total, name);
+    },
+    {
+      snapshot: isSnapshot,
+      baseOfEntry,
+      relOfEntry,
+    },
+  );
   done = configMerges.length + bulkEntries.length;
-  for (const { filename, json } of mergedConfigs) {
-    await appService.writeFile(filename, 'Books', json);
+  for (const { rel, json } of mergedConfigs) {
+    await appService.writeFile(rel, 'Books', json);
   }
 
-  for (const bookEntry of orphanImports) {
-    tick(bookEntry.filename);
+  for (const { entry, rel } of orphanImports) {
+    tick(entry.filename);
     try {
-      const filePath = await appService.resolveFilePath(bookEntry.filename, 'Books');
+      const filePath = await appService.resolveFilePath(rel, 'Books');
       const imported = await appService.importBook(filePath, currentBooks, { overwrite: true });
       if (imported) {
         currentBooksMap.set(imported.hash, imported);
         booksAdded++;
       }
     } catch (error) {
-      console.warn(`Failed to import orphan book from ${bookEntry.filename}:`, error);
+      console.warn(`Failed to import orphan book from ${entry.filename}:`, error);
     }
   }
 
@@ -670,25 +994,48 @@ export async function restoreFromBackupZip(
     }
   }
 
+  // Reading statistics ride a JSON snapshot rather than the SQLite file; merge
+  // them with the same per-event LWW as a server pull. Best-effort: a missing
+  // stats DB is created here, and a malformed section must not fail the whole
+  // restore.
+  const statsEntry = fileEntries.find((e) => e.filename === STATS_SNAPSHOT_FILENAME);
+  if (statsEntry) {
+    try {
+      const raw = await statsEntry.getData!(new Uint8ArrayWriter());
+      await importStatsSnapshot(appService, JSON.parse(new TextDecoder().decode(raw)));
+    } catch (error) {
+      console.warn('Failed to restore reading statistics from backup:', error);
+    }
+  }
+
   await reader.close();
 
   return { booksAdded, booksUpdated, settingsRestored };
 }
 
 /**
- * Write zip entries into the Books dir: natively on Tauri when the zip's
- * location is known, otherwise (web, or a native failure) one file at a time
- * through the IPC bridge.
+ * Write zip entries into their destination dirs: natively on Tauri when the
+ * zip's location is known, otherwise (web, or a native failure) one file at a
+ * time through the IPC bridge.
+ *
+ * For a snapshot the native extractor is rooted at the app data dir and gets
+ * the full BaseDir-prefixed names; the JS fallback maps each entry back to its
+ * BaseDir. Legacy backups write every entry to Books unchanged.
  */
 async function extractEntries(
   appService: AppService,
   entries: FileEntry[],
   source: string | undefined,
-  onProgress?: ProgressCallback,
+  onProgress: ProgressCallback | undefined,
+  target: {
+    snapshot: boolean;
+    baseOfEntry: (name: string) => BaseDir;
+    relOfEntry: (name: string) => string;
+  },
 ): Promise<void> {
   if (isTauriAppPlatform() && source) {
     try {
-      const destDir = await appService.resolveFilePath('', 'Books');
+      const destDir = await appService.resolveFilePath('', target.snapshot ? 'Data' : 'Books');
       const names = entries.map((e) => e.filename);
       await invokeZipCommand(
         'extract_backup_zip',
@@ -708,7 +1055,11 @@ async function extractEntries(
     const entry = entries[i]!;
     onProgress?.(i + 1, entries.length, entry.filename);
     const data = await entry.getData!(new Uint8ArrayWriter());
-    await appService.writeFile(entry.filename, 'Books', data.buffer as ArrayBuffer);
+    await appService.writeFile(
+      target.relOfEntry(entry.filename),
+      target.baseOfEntry(entry.filename),
+      data.buffer as ArrayBuffer,
+    );
   }
 }
 

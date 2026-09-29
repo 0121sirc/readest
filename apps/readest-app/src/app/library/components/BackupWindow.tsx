@@ -54,6 +54,10 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
   const [errorMessage, setErrorMessage] = useState('');
   const [result, setResult] = useState<BackupResult | null>(null);
   const [includeCredentials, setIncludeCredentials] = useState(false);
+  const [snapshot, setSnapshot] = useState(true);
+  const [includeBookFiles, setIncludeBookFiles] = useState(true);
+  const [includeAssets, setIncludeAssets] = useState(true);
+  const [includeStats, setIncludeStats] = useState(true);
 
   const isProcessing = status === 'backing-up' || status === 'restoring';
   // Keep the screen on while a backup or restore runs, otherwise Android
@@ -66,6 +70,10 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
     setErrorMessage('');
     setResult(null);
     setIncludeCredentials(false);
+    setSnapshot(true);
+    setIncludeBookFiles(true);
+    setIncludeAssets(true);
+    setIncludeStats(true);
   };
 
   useEffect(() => {
@@ -97,11 +105,11 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
 
     try {
       const timestamp = new Date().toISOString().slice(0, 10);
-      const filename = `readest-backup-${timestamp}.zip`;
+      const filename = `readest-${snapshot ? 'sync' : 'backup'}-${timestamp}.zip`;
       const saved = await saveBackupFile(
         appService,
         filename,
-        { includeCredentials },
+        { includeCredentials, snapshot, includeBookFiles, includeAssets, includeStats },
         (current, total, currentFile) => {
           setProgress({ current, total, currentFile });
         },
@@ -197,6 +205,60 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
                   'Create a backup of your library and settings or restore from a previous backup. Restoring will merge with your current library.',
                 )}
               </p>
+
+              <label className='flex cursor-pointer items-start gap-2'>
+                <input
+                  type='checkbox'
+                  checked={snapshot}
+                  onChange={(e) => setSnapshot(e.target.checked)}
+                  className='checkbox checkbox-sm mt-0.5 shrink-0'
+                />
+                <span className='text-base-content/70 text-sm'>
+                  {_(
+                    'Sync snapshot: include custom dictionaries, fonts, textures and reading statistics so the archive can be restored without a sync server.',
+                  )}
+                </span>
+              </label>
+
+              {snapshot && (
+                <div className='border-base-300 ml-6 space-y-2 border-l pl-4'>
+                  <label className='flex cursor-pointer items-start gap-2'>
+                    <input
+                      type='checkbox'
+                      checked={includeBookFiles}
+                      onChange={(e) => setIncludeBookFiles(e.target.checked)}
+                      className='checkbox checkbox-sm mt-0.5 shrink-0'
+                    />
+                    <span className='text-base-content/70 text-sm'>
+                      {_(
+                        'Include book files (EPUB/PDF/…). Uncheck to keep only progress, notes and settings.',
+                      )}
+                    </span>
+                  </label>
+                  <label className='flex cursor-pointer items-start gap-2'>
+                    <input
+                      type='checkbox'
+                      checked={includeAssets}
+                      onChange={(e) => setIncludeAssets(e.target.checked)}
+                      className='checkbox checkbox-sm mt-0.5 shrink-0'
+                    />
+                    <span className='text-base-content/70 text-sm'>
+                      {_('Include custom dictionaries, fonts and textures.')}
+                    </span>
+                  </label>
+                  <label className='flex cursor-pointer items-start gap-2'>
+                    <input
+                      type='checkbox'
+                      checked={includeStats}
+                      onChange={(e) => setIncludeStats(e.target.checked)}
+                      className='checkbox checkbox-sm mt-0.5 shrink-0'
+                    />
+                    <span className='text-base-content/70 text-sm'>
+                      {_('Include reading statistics.')}
+                    </span>
+                  </label>
+                </div>
+              )}
 
               <label className='flex cursor-pointer items-start gap-2'>
                 <input
