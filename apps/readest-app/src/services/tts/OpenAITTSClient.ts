@@ -37,4 +37,11 @@ export class OpenAITTSClient extends BufferedTTSClient {
   protected override getPrefetchDepth(): number {
     return getOpenAITTSConfig().lookahead;
   }
+
+  // Optional fixed pause after every chunk (Settings → TTS → Custom OpenAI
+  // TTS), for endpoints that still fall behind: even small pauses beat one
+  // long stall.
+  protected override getBlockPaddingSec(): number {
+    return (getOpenAITTSConfig().blockPaddingMs ?? 0) / 1000;
+  }
 }

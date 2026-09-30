@@ -22,6 +22,7 @@ import { getAPIBaseUrl } from '@/services/environment';
 import {
   getOpenAITTSConfig,
   isOpenAITTSConfigured,
+  OPENAI_TTS_RESPONSE_FORMAT,
   parseOpenAIVoices,
   setOpenAITTSConfig,
 } from './openaiConfig';
@@ -209,7 +210,7 @@ export class OpenAISpeechProvider implements SpeechProvider {
           model: config.model.trim() || undefined,
           input: req.text,
           voice: req.voice,
-          responseFormat: 'wav',
+          responseFormat: OPENAI_TTS_RESPONSE_FORMAT,
         }),
         signal,
       });

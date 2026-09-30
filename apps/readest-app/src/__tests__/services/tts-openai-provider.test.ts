@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { OpenAISpeechProvider } from '@/services/tts/providers/openai';
 import {
+  clampBlockPaddingMs,
   clampLookahead,
   getOpenAITTSConfig,
+  OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS,
   OPENAI_TTS_DEFAULT_LOOKAHEAD,
   parseOpenAIVoices,
   setOpenAITTSConfig,
@@ -22,6 +24,7 @@ describe('OpenAITTS config', () => {
     expect(config.model).toBe('');
     expect(config.voices).toBe('');
     expect(config.lookahead).toBe(OPENAI_TTS_DEFAULT_LOOKAHEAD);
+    expect(config.blockPaddingMs).toBe(OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS);
   });
 
   test('round-trips a stored config', () => {
@@ -31,6 +34,7 @@ describe('OpenAITTS config', () => {
       model: 'tts-1',
       voices: 'alloy, nova',
       lookahead: 5,
+      blockPaddingMs: 500,
     });
     expect(getOpenAITTSConfig()).toEqual({
       baseUrl: 'http://localhost:8080/v1',
@@ -38,6 +42,7 @@ describe('OpenAITTS config', () => {
       model: 'tts-1',
       voices: 'alloy, nova',
       lookahead: 5,
+      blockPaddingMs: 500,
     });
     expect(localStorage.getItem(CONFIG_KEY)).toBeTruthy();
   });
@@ -47,6 +52,13 @@ describe('OpenAITTS config', () => {
     expect(clampLookahead(99)).toBe(10);
     expect(clampLookahead(3.4)).toBe(3);
     expect(clampLookahead(undefined)).toBe(OPENAI_TTS_DEFAULT_LOOKAHEAD);
+  });
+
+  test('clamps the block padding to 0-5000 ms', () => {
+    expect(clampBlockPaddingMs(-10)).toBe(0);
+    expect(clampBlockPaddingMs(99999)).toBe(5000);
+    expect(clampBlockPaddingMs(123.6)).toBe(124);
+    expect(clampBlockPaddingMs(undefined)).toBe(OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS);
   });
 
   test('parses, trims, and drops empty voice ids', () => {

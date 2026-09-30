@@ -562,6 +562,13 @@ export class BufferedTTSClient implements TTSClient {
     return 1;
   }
 
+  // Extra silence (seconds) scheduled after every chunk, on top of the
+  // sentence/paragraph gap. Lets a slow endpoint's stall be spread evenly
+  // instead of landing as one long pause. Fixed, not rate-scaled.
+  protected getBlockPaddingSec(): number {
+    return 0;
+  }
+
   // True while the section queue is starved (consumer waiting on the producer).
   isBuffering(): boolean {
     return this.#queueBuffering;
@@ -587,6 +594,9 @@ export class BufferedTTSClient implements TTSClient {
     await this.stopInternal();
     const rate = this.#rate;
     const depth = Math.max(1, Math.floor(this.getPrefetchDepth()));
+    // Fixed pause inserted after each synthesized chunk (not rate-scaled), to
+    // even out the stalls of a slow endpoint.
+    const blockPaddingSec = Math.max(0, this.getBlockPaddingSec());
     const useNative = this.#player instanceof NativeAudioPlayer;
 
     type Entry =
@@ -597,15 +607,6 @@ export class BufferedTTSClient implements TTSClient {
     const chunkMeta: ChunkMeta[] = [];
     this.#chunkMeta = chunkMeta;
     const events = new AsyncQueue<SpeakQueueEvent>();
-    // Sentence boundaries are reported exactly once per scheduled chunk,
-    // whichever source notices first: the player's own chunk-start events, or
-    // the audio-clock watcher below.
-    const reported = new Set<number>();
-    const report = (index: number) => {
-      if (reported.has(index)) return;
-      reported.add(index);
-      events.push({ kind: 'chunk-start', index });
-    };
     let produceDone = false;
     let aborted = false;
 
@@ -629,11 +630,12 @@ export class BufferedTTSClient implements TTSClient {
 
     const generation = this.#player.startSession(
       (event) => {
-        if (event.type === 'chunk-start') {
-          report(event.chunkIndex);
-        } else if (event.type === 'session-end') {
+        // Sentence boundaries come from the audio-clock poll below, not from
+        // the player's chunk-start events: those fire at the previous chunk's
+        // onended, which leads the voice whenever a scheduled gap is present.
+        if (event.type === 'session-end') {
           events.push({ kind: 'session-end' });
-        } else {
+        } else if (event.type !== 'chunk-start') {
           events.push({ kind: 'error', message: event.message });
         }
       },
@@ -648,22 +650,21 @@ export class BufferedTTSClient implements TTSClient {
     }
     this.#isPlaying = true;
 
-    // While the page is visible, follow the audio clock instead of relying on
-    // onended ordering: a stalled main thread (decode, highlight/CFI work)
-    // delays onended and would otherwise let the sentence highlight drift
-    // behind the voice until the next stall drains the backlog. rAF pauses
-    // while hidden, where the player's own chunk-start events remain the
-    // source (see scheduleChunk's post-gap report).
-    let watcherRaf: number | null = null;
-    const watch = () => {
+    // Highlight follows the chunk the player is actually sounding. Polling the
+    // audio clock keeps the boundary in step through scheduled gaps (block
+    // padding) and main-thread stalls, where onended would either lead or lag.
+    // A coarse interval (not rAF) keeps working while the page is hidden,
+    // where Chromium clamps it to ~1s but the reading stays correct.
+    const BOUNDARY_POLL_MS = 500;
+    let lastReportedChunk = -1;
+    const pollBoundaries = () => {
       if (aborted || this.#activeGeneration !== generation) return;
       const pos = this.#player.getPlaybackPosition(generation);
-      if (pos) report(pos.chunkIndex);
-      watcherRaf = requestAnimationFrame(watch);
+      if (!pos || pos.chunkIndex === lastReportedChunk) return;
+      lastReportedChunk = pos.chunkIndex;
+      events.push({ kind: 'chunk-start', index: pos.chunkIndex });
     };
-    if (typeof requestAnimationFrame === 'function') {
-      watcherRaf = requestAnimationFrame(watch);
-    }
+    const boundaryTimer = setInterval(pollBoundaries, BOUNDARY_POLL_MS);
 
     // Producer: synthesize sentence p in order once there is buffer room.
     const producer = (async () => {
@@ -742,9 +743,9 @@ export class BufferedTTSClient implements TTSClient {
           const sentence = sentences[c]!;
           const nextBlock = c + 1 < sentences.length ? sentences[c + 1]!.blockIndex : -1;
           const gapSec =
-            nextBlock !== -1 && nextBlock !== sentence.blockIndex
+            (nextBlock !== -1 && nextBlock !== sentence.blockIndex
               ? this.#paragraphGapSec
-              : this.#sentenceGapSec;
+              : this.#sentenceGapSec) + blockPaddingSec;
 
           const mark: TTSMark = {
             offset: 0,
@@ -814,7 +815,7 @@ export class BufferedTTSClient implements TTSClient {
       }
     } finally {
       aborted = true;
-      if (watcherRaf !== null) cancelAnimationFrame(watcherRaf);
+      clearInterval(boundaryTimer);
       wake();
       signal.removeEventListener('abort', onAbort);
       this.#queueWake = null;

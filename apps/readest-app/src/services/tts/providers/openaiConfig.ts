@@ -11,6 +11,17 @@ export const OPENAI_TTS_MIN_LOOKAHEAD = 1;
 export const OPENAI_TTS_MAX_LOOKAHEAD = 10;
 export const OPENAI_TTS_DEFAULT_LOOKAHEAD = 5;
 
+// Fixed pause (milliseconds) scheduled after every synthesized chunk. 0
+// disables it. Evens out the stalls of an endpoint that cannot quite keep up.
+export const OPENAI_TTS_MIN_BLOCK_PADDING_MS = 0;
+export const OPENAI_TTS_MAX_BLOCK_PADDING_MS = 5000;
+export const OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS = 300;
+
+// Audio container requested from the endpoint. WAV is the widest-supported
+// lossless option across OpenAI-compatible servers and is what both live
+// playback and the settings Test use, so the test exercises the real path.
+export const OPENAI_TTS_RESPONSE_FORMAT = 'wav';
+
 export interface OpenAITTSConfig {
   // API root, e.g. https://api.openai.com/v1. Empty means the engine is off.
   baseUrl: string;
@@ -24,6 +35,8 @@ export interface OpenAITTSConfig {
   // How many sentences to synthesize ahead of playback (1-6). Self-hosted
   // endpoints can be slow, so overlapping requests keeps audio flowing.
   lookahead: number;
+  // Pause in milliseconds after each synthesized chunk (0-5000); see above.
+  blockPaddingMs?: number;
 }
 
 const DEFAULTS: OpenAITTSConfig = {
@@ -32,12 +45,19 @@ const DEFAULTS: OpenAITTSConfig = {
   model: '',
   voices: '',
   lookahead: OPENAI_TTS_DEFAULT_LOOKAHEAD,
+  blockPaddingMs: OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS,
 };
 
 export const clampLookahead = (value: unknown): number => {
   const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : NaN;
   if (Number.isNaN(n)) return OPENAI_TTS_DEFAULT_LOOKAHEAD;
   return Math.min(OPENAI_TTS_MAX_LOOKAHEAD, Math.max(OPENAI_TTS_MIN_LOOKAHEAD, n));
+};
+
+export const clampBlockPaddingMs = (value: unknown): number => {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : NaN;
+  if (Number.isNaN(n)) return OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS;
+  return Math.min(OPENAI_TTS_MAX_BLOCK_PADDING_MS, Math.max(OPENAI_TTS_MIN_BLOCK_PADDING_MS, n));
 };
 
 export const getOpenAITTSConfig = (): OpenAITTSConfig => {
@@ -50,6 +70,7 @@ export const getOpenAITTSConfig = (): OpenAITTSConfig => {
       model: typeof parsed.model === 'string' && parsed.model ? parsed.model : DEFAULTS.model,
       voices: typeof parsed.voices === 'string' && parsed.voices ? parsed.voices : DEFAULTS.voices,
       lookahead: clampLookahead(parsed.lookahead),
+      blockPaddingMs: clampBlockPaddingMs(parsed.blockPaddingMs),
     };
   } catch {
     return { ...DEFAULTS };

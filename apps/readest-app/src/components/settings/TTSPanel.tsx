@@ -17,9 +17,14 @@ import {
 } from '@/services/tts/types';
 import { getTTSCacheConfig, setTTSCacheConfig } from '@/services/tts/providers/bookCacheStore';
 import {
+  clampBlockPaddingMs,
   getOpenAITTSConfig,
+  OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS,
+  OPENAI_TTS_MAX_BLOCK_PADDING_MS,
   OPENAI_TTS_MAX_LOOKAHEAD,
+  OPENAI_TTS_MIN_BLOCK_PADDING_MS,
   OPENAI_TTS_MIN_LOOKAHEAD,
+  OPENAI_TTS_RESPONSE_FORMAT,
   OpenAITTSConfig,
   parseOpenAIVoices,
   setOpenAITTSConfig,
@@ -27,6 +32,7 @@ import {
 import {
   BoxedList,
   SettingLabel,
+  SettingsInput,
   SettingsRow,
   SettingsSelect,
   SettingsSwitchRow,
@@ -68,6 +74,11 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     getOpenAITTSConfig(),
   );
   const [openaiTesting, setOpenaiTesting] = useState(false);
+  // Edited as a string so a partial entry (empty, "1") isn't clamped under the
+  // user's cursor; committed on blur/Enter.
+  const [blockPaddingInput, setBlockPaddingInput] = useState(
+    String(openaiTTSConfig.blockPaddingMs ?? OPENAI_TTS_DEFAULT_BLOCK_PADDING_MS),
+  );
 
   const updateTTSCacheConfig = (config: typeof ttsCacheConfig) => {
     setTtsCacheConfigState(config);
@@ -78,6 +89,12 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     const next = { ...openaiTTSConfig, ...patch };
     setOpenaiTTSConfigState(next);
     setOpenAITTSConfig(next);
+  };
+
+  const commitBlockPadding = () => {
+    const ms = clampBlockPaddingMs(Number(blockPaddingInput));
+    setBlockPaddingInput(String(ms));
+    updateOpenAITTSConfig({ blockPaddingMs: ms });
   };
 
   // Base for the voice-name discovery hint; literal placeholder until the user
@@ -128,7 +145,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
           model: openaiTTSConfig.model,
           input: 'Hello, this is a test of the text to speech engine.',
           voice,
-          responseFormat: 'mp3',
+          responseFormat: OPENAI_TTS_RESPONSE_FORMAT,
         }),
       });
       if (!res.ok) {
@@ -141,7 +158,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
         return;
       }
       const buffer = await res.arrayBuffer();
-      const url = URL.createObjectURL(new Blob([buffer], { type: 'audio/mpeg' }));
+      const url = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
       const audio = new Audio(url);
       audio.onended = () => URL.revokeObjectURL(url);
       await audio.play().catch(() => {});
@@ -424,6 +441,28 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
                 return { value: String(value), label: String(value) };
               },
             )}
+          />
+        </SettingsRow>
+
+        {/* Block padding */}
+        <SettingsRow
+          label={_('Block Padding')}
+          description={_(
+            'Milliseconds to pause after every block before the next, to even out stalls on slow servers (0-5000)',
+          )}
+        >
+          <SettingsInput
+            type='number'
+            min={OPENAI_TTS_MIN_BLOCK_PADDING_MS}
+            max={OPENAI_TTS_MAX_BLOCK_PADDING_MS}
+            step={50}
+            value={blockPaddingInput}
+            aria-label={_('Block Padding')}
+            onChange={(event) => setBlockPaddingInput(event.target.value)}
+            onBlur={commitBlockPadding}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
+            }}
           />
         </SettingsRow>
       </BoxedList>
