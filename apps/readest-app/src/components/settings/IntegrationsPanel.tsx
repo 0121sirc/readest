@@ -35,8 +35,6 @@ import { saveSysSettings } from '@/helpers/settings';
 import { isCloudSyncAllowed, isReadestAccountHidden } from '@/utils/access';
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { getLocalSendAlias, isLocalSendEnabled } from '@/services/localsend/devicePrefs';
-import { getGoogleWebClientId } from '@/services/sync/providers/gdrive/buildGoogleDriveProvider';
-import { getMicrosoftClientId } from '@/services/sync/providers/onedrive/buildOneDriveProvider';
 import { isICloudSupportedPlatform } from '@/services/sync/providers/icloud/buildICloudProvider';
 import { getICloudContainerStatus } from '@/utils/bridge';
 import { navigateToLogin, navigateToProfile } from '@/utils/nav';
@@ -231,8 +229,10 @@ const IntegrationsPanel: React.FC = () => {
     ) {
       setSubPage(requestedSubPage);
     } else if (requestedSubPage === 'cloudsync') {
-      // Back-compat with the brief unified "Cloud Sync" page.
-      setSubPage('gdrive');
+      // Back-compat with the brief unified "Cloud Sync" page. On web the
+      // Google Drive row is hidden (see the provider list), so land on the
+      // supported web backend instead of an unreachable page.
+      setSubPage(isWebAppPlatform() ? 'webdav' : 'gdrive');
     }
     setRequestedSubPage(null);
   }, [requestedSubPage, setRequestedSubPage, isCloudSyncPremium, userProfilePlan]);
@@ -664,12 +664,19 @@ const IntegrationsPanel: React.FC = () => {
             )}
             {/* Third-party providers are premium: every row carries the tier
                 badge; on a free plan the checkbox is disabled and opening a
-                row routes to the upgrade page instead of the config sub-page. */}
-            {(appService?.isDesktopApp ||
-              appService?.isAndroidApp ||
-              appService?.isIOSApp ||
-              // Web: only when a Web-type GIS client id is configured for this build.
-              (isWebAppPlatform() && !!getGoogleWebClientId())) && (
+                row routes to the upgrade page instead of the config sub-page.
+
+                Google Drive and OneDrive are hidden on the web build: their
+                browser flows redirect back to `window.location.origin`, which
+                only the official OAuth clients (web.readest.com + localhost)
+                have registered — a self-hosted origin fails with
+                `redirect_uri_mismatch` unless the operator registers their own
+                OAuth app, and Drive's web token has no refresh token at all.
+                Native keeps both, where the client ids and custom-scheme
+                redirects are registered at build time. WebDAV is the supported
+                web backend (it tunnels through /api/webdav). See the S3 row
+                below for the same reasoning applied to object storage. */}
+            {(appService?.isDesktopApp || appService?.isAndroidApp || appService?.isIOSApp) && (
               <CloudProviderRow
                 icon={RiGoogleLine}
                 title={_('Google Drive')}
@@ -703,26 +710,29 @@ const IntegrationsPanel: React.FC = () => {
               onOpen={() => (isCloudSyncPremium ? setSubPage('webdav') : navigateToProfile(router))}
               toggleLabel={_('Sync with WebDAV')}
             />
-            <CloudProviderRow
-              icon={RiDatabase2Line}
-              title={_('S3 Storage')}
-              status={s3Status}
-              badge={premiumBadge}
-              checked={!!settings.s3?.enabled}
-              canToggle={canToggleCloudProvider({
-                isPremium: isCloudSyncPremium,
-                isConfigured: s3Configured,
-                isEnabled: !!settings.s3?.enabled,
-              })}
-              onToggle={(next) => toggleCloudProvider('s3', next)}
-              onOpen={() => (isCloudSyncPremium ? setSubPage('s3') : navigateToProfile(router))}
-              toggleLabel={_('Sync with S3')}
-            />
-            {(appService?.isDesktopApp ||
-              appService?.isAndroidApp ||
-              appService?.isIOSApp ||
-              // Web: only when a Web-type Microsoft client id is configured for this build.
-              (isWebAppPlatform() && !!getMicrosoftClientId())) && (
+            {/* S3 is hidden on the web build: a browser PUT/GET signs SigV4
+                locally and needs the bucket to allow this site's origin in its
+                CORS policy, which a self-hosted deployment can't assume the
+                user has set up. Native reaches the bucket through the native
+                HTTP plugin, without CORS. WebDAV is the supported web backend. */}
+            {!isWebAppPlatform() && (
+              <CloudProviderRow
+                icon={RiDatabase2Line}
+                title={_('S3 Storage')}
+                status={s3Status}
+                badge={premiumBadge}
+                checked={!!settings.s3?.enabled}
+                canToggle={canToggleCloudProvider({
+                  isPremium: isCloudSyncPremium,
+                  isConfigured: s3Configured,
+                  isEnabled: !!settings.s3?.enabled,
+                })}
+                onToggle={(next) => toggleCloudProvider('s3', next)}
+                onOpen={() => (isCloudSyncPremium ? setSubPage('s3') : navigateToProfile(router))}
+                toggleLabel={_('Sync with S3')}
+              />
+            )}
+            {(appService?.isDesktopApp || appService?.isAndroidApp || appService?.isIOSApp) && (
               <CloudProviderRow
                 icon={RiMicrosoftLine}
                 title={_('OneDrive')}

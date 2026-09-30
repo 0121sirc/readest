@@ -112,7 +112,7 @@ describe('deleteDirectory', () => {
     await deleteDirectory(config, '/Readest/books/abc');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('https://dav.example.com/Readest/books/abc');
+    expect(url).toBe('https://dav.example.com/Readest/books/abc/');
     expect(init?.method).toBe('DELETE');
     const headers = init?.headers as Record<string, string>;
     expect(headers['Depth']).toBe('infinity');
@@ -163,6 +163,6 @@ describe('deleteRemoteBookDir', () => {
     fetchMock.mockResolvedValueOnce(buildResponse(204));
     await deleteRemoteBookDir(createWebDAVProvider({ ...settings, rootPath: '/MyDav' }), HASH);
     const [url] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('https://dav.example.com/MyDav/Readest/books/abc123');
+    expect(url).toBe('https://dav.example.com/MyDav/Readest/books/abc123/');
   });
 });

@@ -1,5 +1,14 @@
 import { describe, test, expect } from 'vitest';
-import { buildRequestUrl } from '@/services/sync/providers/webdav/client';
+import { asDirectoryPath, buildRequestUrl } from '@/services/sync/providers/webdav/client';
+
+describe('asDirectoryPath', () => {
+  test('adds the trailing slash collection URLs require', () => {
+    expect(asDirectoryPath('/Readest/books')).toBe('/Readest/books/');
+    expect(asDirectoryPath('Readest/books/')).toBe('/Readest/books/');
+    expect(asDirectoryPath('/')).toBe('/');
+    expect(asDirectoryPath('')).toBe('/');
+  });
+});
 
 describe('buildRequestUrl (encodePath)', () => {
   test('escapes spaces and unicode in each segment', () => {

@@ -1,5 +1,6 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { isTauriAppPlatform } from '@/services/environment';
+import { getAPIBaseUrl, isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
+import { buildDigestAuthorization, parseDigestChallenge } from './digestAuth';
 
 /**
  * Minimal WebDAV client used by the Integrations panel.
@@ -100,6 +101,18 @@ export const normalizeRootPath = (path: string): string => {
 };
 
 /**
+ * Collection paths must end with '/' in the request URL. Apache mod_dav (and
+ * others) answer a collection URL that lacks the trailing slash with a 301 to
+ * the canonical form — and a redirected request can no longer carry a valid
+ * Digest `uri`, which surfaces as a confusing `MKCOL failed with status 400`.
+ * MKCOL / PROPFIND / collection-DELETE therefore always target `<path>/`.
+ */
+export const asDirectoryPath = (path: string): string => {
+  const normalized = normalizeRootPath(path);
+  return normalized === '/' ? '/' : `${normalized}/`;
+};
+
+/**
  * Encode every path segment for use in a URL while preserving '/' separators.
  * Spaces and unicode characters get %-escaped; existing %-escapes are
  * deliberately left alone so we don't double-encode caller input.
@@ -129,8 +142,13 @@ const encodePath = (path: string): string => path.split('/').map(encodeSegment).
 
 const buildUrl = (serverUrl: string, path: string): string => {
   const base = trimTrailingSlash(serverUrl);
+  // Preserve a trailing slash the caller supplied (collection URLs): collapse
+  // internal duplicates but keep the final segment separator that mod_dav
+  // needs to avoid a 301.
+  const wantsSlash = path.trim().endsWith('/');
   const normalized = normalizeRootPath(path);
-  return `${base}${encodePath(normalized)}`;
+  const withSlash = wantsSlash && normalized !== '/' ? `${normalized}/` : normalized;
+  return `${base}${encodePath(withSlash)}`;
 };
 
 /**
@@ -160,7 +178,116 @@ const buildAuthHeader = (username: string, password: string): string => {
 /** Public alias for callers that need to build the same Basic header. */
 export const buildBasicAuthHeader = buildAuthHeader;
 
-const getFetch = () => (isTauriAppPlatform() ? tauriFetch : window.fetch.bind(window));
+// Headers the same-origin tunnel forwards; everything else (cookies, etc.) is
+// dropped. Mirrors `api/webdav/route.ts`.
+const PROXY_FORWARDED_HEADERS = [
+  'authorization',
+  'depth',
+  'destination',
+  'overwrite',
+  'if-match',
+  'if-none-match',
+  'range',
+  'content-type',
+];
+
+/**
+ * Web build: route every request through our own origin (`/api/webdav`). A
+ * direct cross-origin PROPFIND/PUT is preflighted and blocked unless the
+ * WebDAV server opts into CORS, which self-hosted servers never do. The tunnel
+ * hands back the upstream `Response` unchanged, so the status/body handling
+ * below (207, 401, XML parsing, …) is identical to the Tauri path.
+ */
+const webProxyFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const source = new Headers(init?.headers);
+  const headers = new Headers({
+    // Header values must be byte strings; the target is already percent-encoded.
+    'x-readest-webdav-url': target,
+    'x-readest-webdav-method': method,
+  });
+  for (const name of PROXY_FORWARDED_HEADERS) {
+    const value = source.get(name);
+    if (value) headers.set(name, value);
+  }
+  return window.fetch(`${getAPIBaseUrl()}/webdav`, {
+    method: 'POST',
+    headers,
+    body: init?.body ?? null,
+    signal: init?.signal ?? null,
+  });
+};
+
+const getFetch = (): FetchLike =>
+  isTauriAppPlatform()
+    ? (tauriFetch as unknown as FetchLike)
+    : isWebAppPlatform()
+      ? webProxyFetch
+      : window.fetch.bind(window);
+
+/** `fetch` shape shared by the platform transports. */
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * The challenge reaches this layer either as the real `WWW-Authenticate` (Tauri
+ * native fetch, direct) or renamed by the same-origin tunnel — the tunnel must
+ * not forward `WWW-Authenticate`, or the renderer opens its native credential
+ * dialog for the `/api/webdav` response.
+ */
+const DIGEST_CHALLENGE_HEADER = 'x-readest-webdav-www-authenticate';
+
+/**
+ * WebDAV fetch that answers `Digest` challenges. It starts with Basic (some
+ * servers accept it), and when the server replies 401 with a Digest challenge
+ * it computes the response header and retries once. Everything above this
+ * helper stays status-based; the Digest dance is invisible to it.
+ */
+const createAuthedFetch = (config: WebDAVConfig): FetchLike => {
+  const base = getFetch();
+  return async (input, init) => {
+    // Callers already attach Basic; pass that through untouched so the common
+    // case keeps its original `RequestInit` shape (and stays transparent).
+    const headers = new Headers(init?.headers);
+    const firstInit: RequestInit = (() => {
+      if (headers.has('Authorization')) return init ?? {};
+      headers.set('Authorization', buildAuthHeader(config.username, config.password));
+      return { ...init, headers };
+    })();
+
+    const response = await base(input, firstInit);
+    if (response.status !== 401) return response;
+
+    const challenge = parseDigestChallenge(
+      response.headers.get('www-authenticate') ?? response.headers.get(DIGEST_CHALLENGE_HEADER),
+    );
+    if (!challenge) return response;
+
+    const target =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    let uri: string;
+    try {
+      const parsed = new URL(target);
+      uri = `${parsed.pathname}${parsed.search}`;
+    } catch {
+      uri = target;
+    }
+    const authorization = buildDigestAuthorization({
+      challenge,
+      method: (init?.method ?? 'GET').toUpperCase(),
+      uri,
+      username: config.username,
+      password: config.password,
+    });
+    if (!authorization) return response;
+
+    // The first body is unused; release it before re-issuing the request.
+    await response.body?.cancel().catch(() => {});
+    const retryHeaders = new Headers(init?.headers);
+    retryHeaders.set('Authorization', authorization);
+    return base(input, { ...init, headers: retryHeaders });
+  };
+};
 
 /**
  * Per-request timeouts. Metadata round-trips (PROPFIND / HEAD / MKCOL /
@@ -181,7 +308,7 @@ const timeoutForMethod = (method: string): number =>
  * the WebDAVRequestError taxonomy as a NETWORK failure.
  */
 const fetchWithTimeout = async (
-  fetchFn: ReturnType<typeof getFetch>,
+  fetchFn: FetchLike,
   url: string,
   init: RequestInit,
   timeoutMs: number,
@@ -299,8 +426,8 @@ export const checkConnection = async (
   if (!config.serverUrl) {
     return { success: false, code: 'SERVER_URL_REQUIRED' };
   }
-  const url = buildUrl(config.serverUrl, rootPath);
-  const fetchFn = getFetch();
+  const url = buildUrl(config.serverUrl, asDirectoryPath(rootPath));
+  const fetchFn = createAuthedFetch(config);
   try {
     const response = await fetchWithTimeout(
       fetchFn,
@@ -346,8 +473,8 @@ export const listDirectory = async (
   rootPath: string,
 ): Promise<WebDAVEntry[]> => {
   const root = normalizeRootPath(rootPath);
-  const url = buildUrl(config.serverUrl, root);
-  const fetchFn = getFetch();
+  const url = buildUrl(config.serverUrl, asDirectoryPath(root));
+  const fetchFn = createAuthedFetch(config);
   // Throw the same WebDAVRequestError taxonomy as the file-level helpers so the
   // provider layer can map list() failures to FileSyncError codes (auth /
   // not-found / network) instead of flattening every failure to UNKNOWN.
@@ -457,7 +584,7 @@ const requestWithMethod = async (
   init: { headers?: Record<string, string>; body?: BodyInit | null } = {},
 ): Promise<Response> => {
   const url = buildUrl(config.serverUrl, path);
-  const fetchFn = getFetch();
+  const fetchFn = createAuthedFetch(config);
   const headers: Record<string, string> = {
     Authorization: buildAuthHeader(config.username, config.password),
     ...(init.headers || {}),
@@ -613,7 +740,7 @@ export const headFile = async (
  * can call this idempotently without first probing existence.
  */
 export const mkdir = async (config: WebDAVConfig, path: string): Promise<void> => {
-  const response = await requestWithMethod(config, path, 'MKCOL');
+  const response = await requestWithMethod(config, asDirectoryPath(path), 'MKCOL');
   if (response.status === 201 || response.status === 405) return;
   if (response.status === 401 || response.status === 403) {
     throw new WebDAVRequestError('Authentication failed', response.status, 'AUTH_FAILED');
@@ -677,7 +804,7 @@ export const deleteFile = async (config: WebDAVConfig, path: string): Promise<vo
  * the desired post-condition.
  */
 export const deleteDirectory = async (config: WebDAVConfig, path: string): Promise<void> => {
-  const response = await requestWithMethod(config, path, 'DELETE', {
+  const response = await requestWithMethod(config, asDirectoryPath(path), 'DELETE', {
     headers: { Depth: 'infinity' },
   });
   if (response.status === 404) return;
