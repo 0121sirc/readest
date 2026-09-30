@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
+import { isReadestAccountHidden } from '@/utils/access';
 import posthog from 'posthog-js';
 
 interface AuthContextType {
@@ -39,6 +40,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   });
 
   useEffect(() => {
+    // Local-first mode has no account to keep in sync; skip every Supabase
+    // call so a stale session can't drive a background refresh (and its
+    // unhandled network failure) on load.
+    if (isReadestAccountHidden()) return;
     const syncSession = (
       session: { access_token: string; refresh_token: string; user: User } | null,
     ) => {
