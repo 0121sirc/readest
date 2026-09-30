@@ -346,6 +346,7 @@ const WebDAVBrowsePane: React.FC<WebDAVBrowsePaneProps> = ({ settings, onUpdateS
             serverUrl: settings.serverUrl,
             username: settings.username,
             password: settings.password,
+            insecureTls: settings.allowInsecureTls !== false,
           },
           currentPath,
         );

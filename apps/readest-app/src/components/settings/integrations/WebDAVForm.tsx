@@ -60,12 +60,18 @@ const WebDAVForm: React.FC = () => {
   const [rootPath, setRootPath] = useState(stored?.rootPath || '/');
   const [isConnecting, setIsConnecting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  // Self-hosted servers routinely use a self-signed certificate; absent means
+  // allowed, so the checkbox starts on.
+  const [allowInsecureTls, setAllowInsecureTls] = useState(stored?.allowInsecureTls !== false);
 
   const handleConnect = async () => {
     if (!url || !username) return;
     setIsConnecting(true);
     const normalizedRoot = normalizeRootPath(rootPath);
-    const result = await checkConnection({ serverUrl: url, username, password }, normalizedRoot);
+    const result = await checkConnection(
+      { serverUrl: url, username, password, insecureTls: allowInsecureTls },
+      normalizedRoot,
+    );
     if (!result.success) {
       eventDispatcher.dispatch('toast', {
         type: 'error',
@@ -85,6 +91,7 @@ const WebDAVForm: React.FC = () => {
         username,
         password,
         rootPath: normalizedRoot,
+        allowInsecureTls,
       }),
     }));
     setIsConnecting(false);
@@ -222,6 +229,22 @@ const WebDAVForm: React.FC = () => {
           onChange={(e) => setRootPath(e.target.value)}
         />
       </div>
+
+      <label className='flex cursor-pointer items-center justify-between gap-3'>
+        <span className='text-sm'>
+          {_('Allow self-signed certificates')}
+          <span className='text-base-content/60 block text-xs'>
+            {_('Skip TLS verification when the server uses a self-signed certificate')}
+          </span>
+        </span>
+        <input
+          type='checkbox'
+          className='toggle toggle-sm'
+          checked={allowInsecureTls}
+          onChange={(e) => setAllowInsecureTls(e.target.checked)}
+          aria-label={_('Allow self-signed certificates')}
+        />
+      </label>
 
       <div className='flex justify-end pt-1'>
         <button

@@ -82,6 +82,8 @@ export const createWebDAVProvider = (settings: WebDAVSettings): FileSyncProvider
     serverUrl: settings.serverUrl,
     username: settings.username,
     password: settings.password,
+    // Absent means allowed (self-hosted servers routinely use a self-signed cert).
+    insecureTls: settings.allowInsecureTls !== false,
   };
 
   const provider: FileSyncProvider = {

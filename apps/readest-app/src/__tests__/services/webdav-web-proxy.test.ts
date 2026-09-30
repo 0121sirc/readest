@@ -40,5 +40,22 @@ describe('web WebDAV transport', () => {
     expect(headers.get('authorization')).toMatch(/^Basic /);
     // `checkConnection` probes with Depth: 0; that must survive the tunnel.
     expect(headers.get('depth')).toBe('0');
+    // Insecure TLS is allowed by default (self-hosted self-signed servers).
+    expect(headers.get('x-readest-webdav-insecure')).toBe('1');
+  });
+
+  test('omits the insecure flag when the user turns self-signed certs off', async () => {
+    await checkConnection(
+      {
+        serverUrl: 'https://dav.example.com',
+        username: 'alice',
+        password: 'secret',
+        insecureTls: false,
+      },
+      '/books',
+    );
+
+    const headers = fetchMock.mock.calls[0]![1].headers as Headers;
+    expect(headers.get('x-readest-webdav-insecure')).toBeNull();
   });
 });

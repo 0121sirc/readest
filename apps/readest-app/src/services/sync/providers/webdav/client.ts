@@ -45,6 +45,13 @@ export interface WebDAVConfig {
   serverUrl: string;
   username: string;
   password: string;
+  /**
+   * Accept a self-signed / invalid TLS certificate (the `curl -k` equivalent).
+   * Undefined means allowed — self-hosted servers routinely use one. Native
+   * passes `danger` to the HTTP plugin; web asks the same-origin tunnel to
+   * skip verification for the upstream request.
+   */
+  insecureTls?: boolean;
 }
 
 export type WebDAVConnectErrorCode =
@@ -198,7 +205,11 @@ const PROXY_FORWARDED_HEADERS = [
  * hands back the upstream `Response` unchanged, so the status/body handling
  * below (207, 401, XML parsing, …) is identical to the Tauri path.
  */
-const webProxyFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+const webProxyFetch = async (
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  insecure: boolean,
+): Promise<Response> => {
   const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   const method = (init?.method ?? 'GET').toUpperCase();
   const source = new Headers(init?.headers);
@@ -207,6 +218,7 @@ const webProxyFetch = async (input: RequestInfo | URL, init?: RequestInit): Prom
     'x-readest-webdav-url': target,
     'x-readest-webdav-method': method,
   });
+  if (insecure) headers.set('x-readest-webdav-insecure', '1');
   for (const name of PROXY_FORWARDED_HEADERS) {
     const value = source.get(name);
     if (value) headers.set(name, value);
@@ -219,15 +231,22 @@ const webProxyFetch = async (input: RequestInfo | URL, init?: RequestInit): Prom
   });
 };
 
-const getFetch = (): FetchLike =>
-  isTauriAppPlatform()
-    ? (tauriFetch as unknown as FetchLike)
-    : isWebAppPlatform()
-      ? webProxyFetch
-      : window.fetch.bind(window);
-
 /** `fetch` shape shared by the platform transports. */
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Native fetch with TLS verification disabled. The WebDAV transport uses this
+ * when the user allows self-signed certificates (the default) — matching how
+ * the OPDS / ABS / KOSync clients already pass the plugin's `danger` option.
+ */
+const tauriFetchInsecure: FetchLike = (input, init) =>
+  tauriFetch(
+    input as never,
+    {
+      ...init,
+      danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true },
+    } as never,
+  );
 
 /**
  * The challenge reaches this layer either as the real `WWW-Authenticate` (Tauri
@@ -244,7 +263,14 @@ const DIGEST_CHALLENGE_HEADER = 'x-readest-webdav-www-authenticate';
  * helper stays status-based; the Digest dance is invisible to it.
  */
 const createAuthedFetch = (config: WebDAVConfig): FetchLike => {
-  const base = getFetch();
+  const allowInsecure = config.insecureTls !== false;
+  const base: FetchLike = isTauriAppPlatform()
+    ? allowInsecure
+      ? tauriFetchInsecure
+      : (tauriFetch as unknown as FetchLike)
+    : isWebAppPlatform()
+      ? (input, init) => webProxyFetch(input, init, allowInsecure)
+      : window.fetch.bind(window);
   return async (input, init) => {
     // Callers already attach Basic; pass that through untouched so the common
     // case keeps its original `RequestInit` shape (and stays transparent).

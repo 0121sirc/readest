@@ -6,6 +6,8 @@ export interface WebDAVConnectFormValues {
   password: string;
   /** Already passed through `normalizeRootPath` by the caller. */
   rootPath: string;
+  /** Whether to accept the server's self-signed / invalid TLS certificate. */
+  allowInsecureTls?: boolean;
 }
 
 /**
@@ -41,5 +43,8 @@ export const buildWebDAVConnectSettings = (
     username: form.username,
     password: form.password,
     rootPath: form.rootPath,
+    // Only written when the form supplied it; otherwise prior state (or the
+    // absent-means-allow default in the transport) stands.
+    ...(form.allowInsecureTls !== undefined ? { allowInsecureTls: form.allowInsecureTls } : {}),
   } as WebDAVSettings;
 };

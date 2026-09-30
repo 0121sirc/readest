@@ -61,6 +61,37 @@ describe('buildWebDAVConnectSettings', () => {
     expect(next.lastSyncedAt).toBe(1_700_000_001_500);
   });
 
+  test('persists the allow-insecure-TLS choice when the form supplies it', () => {
+    const next = buildWebDAVConnectSettings(undefined, {
+      serverUrl: 'https://dav.example.com',
+      username: 'alice',
+      password: 'hunter2',
+      rootPath: '/Readest',
+      allowInsecureTls: false,
+    });
+    expect(next.allowInsecureTls).toBe(false);
+  });
+
+  test('preserves the prior allow-insecure-TLS choice when the form omits it', () => {
+    const next = buildWebDAVConnectSettings(
+      {
+        enabled: false,
+        serverUrl: 'https://dav.example.com',
+        username: 'alice',
+        password: 'hunter2',
+        rootPath: '/Readest',
+        allowInsecureTls: false,
+      },
+      {
+        serverUrl: 'https://dav.example.com',
+        username: 'alice',
+        password: 'hunter2',
+        rootPath: '/Readest',
+      },
+    );
+    expect(next.allowInsecureTls).toBe(false);
+  });
+
   test('updates the credentials when the user reconnects to a different account', () => {
     const previous: WebDAVSettings = {
       enabled: false,

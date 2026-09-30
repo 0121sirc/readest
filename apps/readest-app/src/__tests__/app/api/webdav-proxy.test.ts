@@ -27,6 +27,7 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchSpy = vi.fn();
   vi.stubGlobal('fetch', fetchSpy);
+  delete process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
 });
 
 afterEach(() => {
@@ -133,6 +134,39 @@ describe('webdav proxy forwarding', () => {
     expect(secondHeaders.get('authorization')).toBeNull();
     // The redirect hop's 401 is what the client sees, so it can re-auth.
     expect(res.status).toBe(401);
+  });
+
+  it('disables TLS verification for an insecure request, then restores it', async () => {
+    let seenDuringFetch: string | undefined = 'unset';
+    fetchSpy.mockImplementationOnce(async () => {
+      seenDuringFetch = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+      return new Response('', { status: 207 });
+    });
+
+    const res = await POST(
+      proxyReq(
+        'https://dav.example.com/x',
+        'PROPFIND',
+        { 'x-readest-webdav-insecure': '1' },
+        '<p/>',
+      ),
+    );
+
+    expect(res.status).toBe(207);
+    expect(seenDuringFetch).toBe('0');
+    expect(process.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBeUndefined();
+  });
+
+  it('leaves TLS verification untouched without the insecure header', async () => {
+    let seenDuringFetch: string | undefined = 'unset';
+    fetchSpy.mockImplementationOnce(async () => {
+      seenDuringFetch = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+      return new Response('', { status: 207 });
+    });
+
+    await POST(proxyReq('https://dav.example.com/x', 'PROPFIND', {}, '<p/>'));
+
+    expect(seenDuringFetch).toBeUndefined();
   });
 
   it('renames WWW-Authenticate instead of forwarding it (no browser dialog)', async () => {

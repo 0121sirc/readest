@@ -73,6 +73,39 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
 /** Renamed `WWW-Authenticate`, readable same-origin, safe for the renderer. */
 const AUTH_CHALLENGE_HEADER = 'x-readest-webdav-www-authenticate';
 
+/** Set by the client when it accepts the server's self-signed certificate. */
+const INSECURE_TLS_HEADER = 'x-readest-webdav-insecure';
+
+// Native fetch (undici) has no per-request "ignore certificate" option, so the
+// only lever on Node is the process-wide NODE_TLS_REJECT_UNAUTHORIZED. Swapping
+// it around a single request is racy, so insecure requests are serialized: at
+// most one takes the process-wide bypass at a time. On the Cloudflare edge this
+// is a no-op (and self-signed LAN hosts are unreachable there anyway).
+let insecureChain: Promise<unknown> = Promise.resolve();
+const fetchUpstream = async (
+  url: string,
+  init: RequestInit,
+  insecure: boolean,
+): Promise<Response> => {
+  if (!insecure || typeof process === 'undefined') return fetch(url, init);
+  const run = async () => {
+    const previous = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+    process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
+    try {
+      return await fetch(url, init);
+    } finally {
+      if (previous === undefined) delete process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+      else process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = previous;
+    }
+  };
+  const result = insecureChain.then(run, run);
+  insecureChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+};
+
 // Hop-by-hop headers must not cross the proxy boundary. `content-encoding` is
 // dropped because `fetch` has already decoded the body, so forwarding it would
 // make the browser decode a second time.
@@ -157,6 +190,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   // GET/HEAD carry no body; everything else may. Buffer so redirects can replay.
   const buffered = ['GET', 'HEAD'].includes(method) ? undefined : await request.arrayBuffer();
   const body = buffered && buffered.byteLength > 0 ? buffered : undefined;
+  const insecure = request.headers.get(INSECURE_TLS_HEADER) === '1';
 
   const baseHeaders = new Headers();
   for (const name of FORWARDED_REQUEST_HEADERS) {
@@ -181,12 +215,11 @@ export async function POST(request: NextRequest): Promise<Response> {
       if (hop > 0 && (digestAuth || parsed.origin !== authOrigin) && headers.has('authorization')) {
         headers.delete('authorization');
       }
-      const upstream = await fetch(parsed.toString(), {
-        method,
-        headers,
-        body,
-        redirect: 'manual',
-      });
+      const upstream = await fetchUpstream(
+        parsed.toString(),
+        { method, headers, body, redirect: 'manual' },
+        insecure,
+      );
       if ([301, 302, 303, 307, 308].includes(upstream.status) && upstream.headers.has('location')) {
         const location = upstream.headers.get('location')!;
         await upstream.body?.cancel();

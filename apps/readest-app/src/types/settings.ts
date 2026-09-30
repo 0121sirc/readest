@@ -210,6 +210,10 @@ export interface WebDAVSettings {
   // detection probe: any native /api/sync row newer than this means
   // another device is still writing the gated channels.
   providerSelectedAt?: number;
+  // Accept self-signed / otherwise invalid TLS certificates from the WebDAV
+  // server. Self-hosted servers routinely use one; undefined is treated as
+  // allowed (the connect form defaults it on).
+  allowInsecureTls?: boolean;
 }
 
 /**
