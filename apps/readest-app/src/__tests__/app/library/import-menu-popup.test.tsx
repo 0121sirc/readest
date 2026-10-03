@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import ImportMenuPopup, { getMenuPosition } from '@/app/library/components/ImportMenuPopup';
 
@@ -7,9 +7,8 @@ vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => (key: string) => key,
 }));
 
-const useEnvMock = vi.fn();
 vi.mock('@/context/EnvContext', () => ({
-  useEnv: () => useEnvMock(),
+  useEnv: () => ({ appService: {}, envConfig: {} }),
 }));
 
 const renderPopup = (props: Partial<React.ComponentProps<typeof ImportMenuPopup>> = {}) => {
@@ -21,7 +20,6 @@ const renderPopup = (props: Partial<React.ComponentProps<typeof ImportMenuPopup>
       anchor={anchor}
       onClose={onClose}
       onImportBooksFromFiles={vi.fn()}
-      onOpenCatalogManager={vi.fn()}
       onOpenFeeds={vi.fn()}
       {...props}
     />,
@@ -29,14 +27,9 @@ const renderPopup = (props: Partial<React.ComponentProps<typeof ImportMenuPopup>
   return { ...utils, anchor, onClose };
 };
 
-beforeEach(() => {
-  useEnvMock.mockReturnValue({ appService: { isOnlineCatalogsAccessible: true } });
-});
-
 afterEach(() => {
   cleanup();
   document.body.innerHTML = '';
-  useEnvMock.mockReset();
 });
 
 describe('ImportMenuPopup', () => {
@@ -45,7 +38,8 @@ describe('ImportMenuPopup', () => {
 
     expect(screen.getByRole('menuitem', { name: 'From Local File' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'From Feed URL' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Online Library' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Online Library' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'OPDS Catalogs' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'From Directory' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'From Web Browser' })).toBeNull();
   });
@@ -62,13 +56,6 @@ describe('ImportMenuPopup', () => {
     expect(onImportFromWebBrowser).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menuitem', { name: 'From Web URL' })).toBeNull();
     expect(onClose).toHaveBeenCalledTimes(2);
-  });
-
-  it('uses the OPDS label when curated online catalogs are unavailable', () => {
-    useEnvMock.mockReturnValue({ appService: { isOnlineCatalogsAccessible: false } });
-    renderPopup();
-
-    expect(screen.getByRole('menuitem', { name: 'OPDS Catalogs' })).toBeTruthy();
   });
 
   it('runs the selected action and dismisses the popup', () => {

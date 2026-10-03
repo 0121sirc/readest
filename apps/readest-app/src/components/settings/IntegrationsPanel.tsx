@@ -3,22 +3,13 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MdChevronRight } from 'react-icons/md';
 import {
-  RiBookOpenLine,
-  RiPlanetLine,
-  RiRssLine,
-  RiBookReadLine,
-  RiBook3Line,
-  RiFileList3Line,
   RiDiscordLine,
-  RiSendPlaneLine,
-  RiWifiLine,
   RiCloudLine,
   RiCloudFill,
   RiDatabase2Line,
   RiGoogleLine,
   RiMicrosoftLine,
   RiAppleLine,
-  RiHeadphoneLine,
 } from 'react-icons/ri';
 import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
@@ -26,26 +17,13 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useKeyDownActions } from '@/hooks/useKeyDownActions';
 import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useSettingsStore } from '@/store/settingsStore';
-import { useCustomOPDSStore } from '@/store/customOPDSStore';
-import { useABSServerStore } from '@/store/absServerStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
-import { useLocalSendStore } from '@/store/localsendStore';
-import { CatalogManager } from '@/app/opds/components/CatalogManager';
 import { saveSysSettings } from '@/helpers/settings';
 import { isCloudSyncAllowed, isReadestAccountHidden } from '@/utils/access';
-import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
-import { getLocalSendAlias, isLocalSendEnabled } from '@/services/localsend/devicePrefs';
+import { isWebAppPlatform } from '@/services/environment';
 import { isICloudSupportedPlatform } from '@/services/sync/providers/icloud/buildICloudProvider';
 import { getICloudContainerStatus } from '@/utils/bridge';
 import { navigateToLogin, navigateToProfile } from '@/utils/nav';
-import ABSForm from './integrations/ABSForm';
-import BookOrbitForm from './integrations/BookOrbitForm';
-import KOSyncForm from './integrations/KOSyncForm';
-import ReadwiseForm from './integrations/ReadwiseForm';
-import HardcoverForm from './integrations/HardcoverForm';
-import NotionForm from './integrations/NotionForm';
-import SendToReadestForm from './integrations/SendToReadestForm';
-import LocalSendForm from './integrations/LocalSendForm';
 import WebDAVForm from './integrations/WebDAVForm';
 import GoogleDriveForm from './integrations/GoogleDriveForm';
 import OneDriveForm from './integrations/OneDriveForm';
@@ -70,23 +48,7 @@ import { canBackendRun } from '@/services/sync/file/runLibrarySync';
 import SubPageHeader from './SubPageHeader';
 import { BoxedList, NavigationRow, SectionTitle, SettingLabel, Tips } from './primitives';
 
-type SubPage =
-  | 'kosync'
-  | 'bookorbit'
-  | 'webdav'
-  | 'gdrive'
-  | 's3'
-  | 'onedrive'
-  | 'icloud'
-  | 'readest-cloud'
-  | 'readwise'
-  | 'hardcover'
-  | 'notion'
-  | 'opds'
-  | 'audiobookshelf'
-  | 'send'
-  | 'localsend'
-  | null;
+type SubPage = 'webdav' | 'gdrive' | 's3' | 'onedrive' | 'icloud' | 'readest-cloud' | null;
 
 /**
  * Integrations panel — single point of discovery for external service config:
@@ -106,13 +68,6 @@ const IntegrationsPanel: React.FC = () => {
   const { envConfig, appService } = useEnv();
   const { user } = useAuth();
   const { settings, requestedSubPage, setRequestedSubPage } = useSettingsStore();
-  const opdsCatalogs = useCustomOPDSStore((s) => s.catalogs);
-  const opdsCount = opdsCatalogs.filter((c) => !c.deletedAt).length;
-  const absServers = useABSServerStore((s) => s.servers);
-  const absCount = absServers.filter((s) => !s.deletedAt).length;
-  // The device name Nearby BookDrop announces once its service is running,
-  // so the integrations row can show it in place of a bare "On".
-  const localSendAlias = useLocalSendStore((s) => s.status?.alias);
   // Surface a library-wide WebDAV sync that's mid-flight in the row's
   // status line. Keeps the user from feeling like the run was lost
   // when they back out of the WebDAV sub-page or close the dialog.
@@ -154,22 +109,7 @@ const IntegrationsPanel: React.FC = () => {
 
   const [subPage, setSubPage] = useState<SubPage>(null);
 
-  // Hydrate the OPDS store from settings so the row's catalog count is
-  // accurate on first open. Without this the store starts empty and the
-  // count reads zero until the user drills into the OPDS sub-page (where
-  // CatalogManager loads it). Loading happens once per mount; the store
-  // handles backfilling contentId for legacy entries.
-  useEffect(() => {
-    void useCustomOPDSStore.getState().loadCustomOPDSCatalogs(envConfig);
-  }, [envConfig]);
-
-  // Same hydration as above, for the Audiobookshelf server list — keeps the
-  // Content Sources row's server count accurate on first open.
-  useEffect(() => {
-    void useABSServerStore.getState().loadABSServers(envConfig);
-  }, [envConfig]);
-
-  // Android Back / Esc: when any integrations sub-page (KOSync, WebDAV,
+  // Android Back / Esc: when any integrations sub-page (WebDAV,
   // Readwise, Hardcover, OPDS, Send-to-Readest) is open, intercept and
   // step back to the integrations list instead of letting <Dialog>'s
   // listener close the whole Settings dialog. The hook registers its
@@ -212,20 +152,11 @@ const IntegrationsPanel: React.FC = () => {
       return;
     }
     if (
-      requestedSubPage === 'kosync' ||
-      requestedSubPage === 'bookorbit' ||
       requestedSubPage === 'webdav' ||
       requestedSubPage === 'gdrive' ||
       requestedSubPage === 's3' ||
       requestedSubPage === 'onedrive' ||
-      requestedSubPage === 'icloud' ||
-      requestedSubPage === 'readwise' ||
-      requestedSubPage === 'hardcover' ||
-      requestedSubPage === 'notion' ||
-      requestedSubPage === 'opds' ||
-      requestedSubPage === 'audiobookshelf' ||
-      requestedSubPage === 'send' ||
-      requestedSubPage === 'localsend'
+      requestedSubPage === 'icloud'
     ) {
       setSubPage(requestedSubPage);
     } else if (requestedSubPage === 'cloudsync') {
@@ -241,24 +172,6 @@ const IntegrationsPanel: React.FC = () => {
   // SubPageHeader's "Integrations" label lands at the exact same Y position
   // as the list-view's h2 — clicking a row reads as a navigation morph
   // rather than a layout shift.
-  if (subPage === 'kosync')
-    return (
-      <div className='my-4 w-full'>
-        <KOSyncForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-  if (subPage === 'localsend')
-    return (
-      <div className='my-4 w-full'>
-        <LocalSendForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-  if (subPage === 'bookorbit')
-    return (
-      <div className='my-4 w-full'>
-        <BookOrbitForm onBack={() => setSubPage(null)} />
-      </div>
-    );
   if (subPage === 'webdav')
     return (
       <div className='my-4 w-full'>
@@ -441,68 +354,6 @@ const IntegrationsPanel: React.FC = () => {
         </BoxedList>
       </div>
     );
-  if (subPage === 'readwise')
-    return (
-      <div className='my-4 w-full'>
-        <ReadwiseForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-  if (subPage === 'hardcover')
-    return (
-      <div className='my-4 w-full'>
-        <HardcoverForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-  if (subPage === 'notion')
-    return (
-      <div className='my-4 w-full'>
-        <NotionForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-  if (subPage === 'opds')
-    return (
-      <div className='my-4 w-full'>
-        <SubPageHeader
-          parentLabel={_('Integrations')}
-          currentLabel={_('OPDS Catalogs')}
-          description={_('Browse and download books from online catalogs.')}
-          onBack={() => setSubPage(null)}
-        />
-        <CatalogManager inSubPage />
-      </div>
-    );
-  if (subPage === 'audiobookshelf')
-    return (
-      <div className='my-4 w-full'>
-        <ABSForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-  if (subPage === 'send')
-    return (
-      <div className='my-4 w-full'>
-        <SendToReadestForm onBack={() => setSubPage(null)} />
-      </div>
-    );
-
-  const koSyncStatus = settings.kosync?.enabled
-    ? settings.kosync.username
-      ? _('Connected as {{user}}', { user: settings.kosync.username })
-      : _('Connected')
-    : _('Not connected');
-
-  const bookOrbitStatus = settings.bookorbit?.enabled
-    ? settings.bookorbit.username
-      ? _('Connected as {{user}}', { user: settings.bookorbit.username })
-      : _('Connected')
-    : _('Not connected');
-
-  const readwiseStatus = settings.readwise?.enabled ? _('Connected') : _('Not connected');
-  const hardcoverStatus = settings.hardcover?.enabled ? _('Connected') : _('Not connected');
-  const notionStatus =
-    settings.notion?.enabled && settings.notion.accessToken && settings.notion.databaseId
-      ? _('Connected')
-      : _('Not connected');
-
   // Cloud sync providers are independently selectable (#5062): any subset of
   // {Readest Cloud, WebDAV, Google Drive, S3, OneDrive, iCloud} can sync the
   // library at once. A "configured" third-party provider (WebDAV creds / a Drive
@@ -586,15 +437,6 @@ const IntegrationsPanel: React.FC = () => {
     await persistCloudProviderEnabled(envConfig, kind, next);
   };
 
-  const opdsStatus =
-    opdsCount > 0 ? _('{{count}} catalog', { count: opdsCount }) : _('No catalogs');
-  const absStatus = absCount > 0 ? _('{{count}} server', { count: absCount }) : _('No servers');
-  // Enabled rows show the announced device name (falling back to the stored
-  // custom alias, then a bare "On" until the service reports its alias).
-  const localSendStatus = !isLocalSendEnabled()
-    ? _('Off')
-    : localSendAlias || getLocalSendAlias() || _('On');
-
   return (
     <div className='my-4 w-full space-y-6'>
       <div className='w-full px-4'>
@@ -602,44 +444,6 @@ const IntegrationsPanel: React.FC = () => {
         <p className='text-base-content/70 text-sm leading-relaxed'>
           {_('Connect Readest to external services for sync, highlights, and catalogs.')}
         </p>
-      </div>
-
-      <div className='w-full' data-setting-id='settings.integrations.sync'>
-        <SectionTitle className='mb-2'>{_('Reading Sync')}</SectionTitle>
-        <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>
-          <div className='divide-base-200 divide-y'>
-            <IntegrationRow
-              icon={RiBookOpenLine}
-              title={_('KOReader')}
-              status={koSyncStatus}
-              onClick={() => setSubPage('kosync')}
-            />
-            <IntegrationRow
-              icon={RiPlanetLine}
-              title={_('BookOrbit')}
-              status={bookOrbitStatus}
-              onClick={() => setSubPage('bookorbit')}
-            />
-            <IntegrationRow
-              icon={RiBookReadLine}
-              title={_('Readwise')}
-              status={readwiseStatus}
-              onClick={() => setSubPage('readwise')}
-            />
-            <IntegrationRow
-              icon={RiBook3Line}
-              title={_('Hardcover')}
-              status={hardcoverStatus}
-              onClick={() => setSubPage('hardcover')}
-            />
-            <IntegrationRow
-              icon={RiFileList3Line}
-              title={_('Notion')}
-              status={notionStatus}
-              onClick={() => setSubPage('notion')}
-            />
-          </div>
-        </div>
       </div>
 
       <div className='w-full' data-setting-id='settings.integrations.cloudSync'>
@@ -792,42 +596,6 @@ const IntegrationsPanel: React.FC = () => {
         )}
       </div>
 
-      <div className='w-full' data-setting-id='settings.integrations.catalogs'>
-        <SectionTitle className='mb-2'>{_('Content Sources')}</SectionTitle>
-        <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>
-          <div className='divide-base-200 divide-y'>
-            <IntegrationRow
-              icon={RiRssLine}
-              title={_('OPDS Catalogs')}
-              status={opdsStatus}
-              onClick={() => setSubPage('opds')}
-            />
-            <IntegrationRow
-              icon={RiHeadphoneLine}
-              title={_('Audiobookshelf')}
-              status={absStatus}
-              onClick={() => setSubPage('audiobookshelf')}
-            />
-            {!hideAccount && (
-              <IntegrationRow
-                icon={RiSendPlaneLine}
-                title={_('Send to Readest')}
-                status={_('Email books to your library')}
-                onClick={() => setSubPage('send')}
-              />
-            )}
-            {isTauriAppPlatform() && (
-              <IntegrationRow
-                icon={RiWifiLine}
-                title={_('Nearby BookDrop')}
-                status={localSendStatus}
-                onClick={() => setSubPage('localsend')}
-              />
-            )}
-          </div>
-        </div>
-      </div>
-
       {!hideAccount && appService?.isDesktopApp && (
         <div className='w-full' data-setting-id='settings.integrations.discord'>
           <SectionTitle className='mb-2'>{_('Discord')}</SectionTitle>
@@ -845,43 +613,6 @@ const IntegrationsPanel: React.FC = () => {
         </div>
       )}
     </div>
-  );
-};
-
-interface IntegrationRowProps {
-  icon: React.ElementType;
-  title: string;
-  status: string;
-  onClick: () => void;
-}
-
-const IntegrationRow: React.FC<IntegrationRowProps> = ({ icon: Icon, title, status, onClick }) => {
-  return (
-    <button
-      type='button'
-      onClick={onClick}
-      className={clsx(
-        'group flex w-full items-center gap-3 px-4 py-3 text-left',
-        'transition-colors duration-150',
-        'focus-visible:ring-base-content/15 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset',
-      )}
-    >
-      <span
-        className={clsx(
-          'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
-          'bg-base-200 text-base-content/70',
-          'transition-colors duration-150',
-          'group-hover:bg-base-300/70',
-        )}
-      >
-        <Icon className='h-5 w-5' />
-      </span>
-      <div className='flex min-w-0 flex-1 flex-col gap-0.5'>
-        <SettingLabel>{title}</SettingLabel>
-        <span className='text-base-content/65 truncate text-[0.85em]'>{status}</span>
-      </div>
-      <MdChevronRight className='text-base-content/50 h-5 w-5 shrink-0' />
-    </button>
   );
 };
 

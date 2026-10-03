@@ -45,7 +45,6 @@ const renderHeader = () =>
           searchConfig={DEFAULT_BOOK_SEARCH_CONFIG}
           onPullLibrary={noop}
           onImportBooksFromFiles={noop}
-          onOpenCatalogManager={noop}
           onOpenFeeds={noop}
           onToggleSelectMode={noop}
           onSelectAll={noop}

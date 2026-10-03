@@ -20,7 +20,6 @@ import {
   type BookContextMenuItemId,
 } from '@/app/library/utils/libraryUtils';
 import { isTauriAppPlatform } from '@/services/environment';
-import { isReadestAccountHidden } from '@/utils/access';
 import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import BookItem from './BookItem';
 import GroupItem from './GroupItem';
@@ -126,7 +125,6 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
   showTimeRemaining,
 }) => {
   const _ = useTranslation();
-  const hideAccount = isReadestAccountHidden();
   const { appService } = useEnv();
   const { settings } = useSettingsStore();
   const { openBook } = useOpenBook({ setLoading, handleBookDownload });
@@ -240,14 +238,6 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
           handleBookUpload(book);
         },
       },
-      share: {
-        text: _('Share Book'),
-        action: async () => {
-          // Bookshelf.tsx hosts the dialog; we dispatch and let it route
-          // unauthenticated users into the login flow first.
-          eventDispatcher.dispatch('show-share-dialog', { book });
-        },
-      },
       offlineDownload: {
         text: _('Download for Offline'),
         action: async () => {
@@ -275,15 +265,10 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
         },
       },
     };
-    return (
-      getBookContextMenuItemIds(book, {
-        localSend: isTauriAppPlatform() && isLocalSendEnabled(),
-        absOffline: isTauriAppPlatform(),
-      })
-        // Sharing needs a Readest account; local-first mode has none.
-        .filter((id) => !hideAccount || id !== 'share')
-        .map((id) => itemOptions[id])
-    );
+    return getBookContextMenuItemIds(book, {
+      localSend: isTauriAppPlatform() && isLocalSendEnabled(),
+      absOffline: isTauriAppPlatform(),
+    }).map((id) => itemOptions[id]);
   };
 
   const buildGroupMenuItems = (group: BooksGroup): BookContextMenuItem[] => {

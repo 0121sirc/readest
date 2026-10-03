@@ -190,6 +190,99 @@ describe('googleProvider', () => {
 });
 
 // ---------------------------------------------------------------------------
+// MyMemory Provider
+// ---------------------------------------------------------------------------
+describe('mymemoryProvider', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    // The provider keeps a module-level concurrency counter, so each test needs
+    // a fresh module.
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns empty array for empty input', async () => {
+    const { mymemoryProvider } = await import('@/services/translators/providers/mymemory');
+    const result = await mymemoryProvider.translate([], 'en', 'fr');
+    expect(result).toEqual([]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('translates via the langpair query and keeps empty lines', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ responseStatus: 200, responseData: { translatedText: 'Bonjour' } }),
+    });
+
+    const { mymemoryProvider } = await import('@/services/translators/providers/mymemory');
+    const result = await mymemoryProvider.translate(['', 'Hello'], 'zh', 'en');
+
+    expect(result).toEqual(['', 'Bonjour']);
+    // Only the non-empty line goes out.
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const url = new URL(mockFetch.mock.calls[0]![0] as string);
+    expect(url.origin + url.pathname).toBe('https://api.mymemory.translated.net/get');
+    // normalizeToShortLang maps bare `zh` to the script tag MyMemory accepts.
+    expect(url.searchParams.get('langpair')).toBe('zh-Hans|en');
+    expect(url.searchParams.get('q')).toBe('Hello');
+  });
+
+  it('sends Autodetect when the source language is AUTO', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ responseStatus: 200, responseData: { translatedText: 'Hello' } }),
+    });
+
+    const { mymemoryProvider } = await import('@/services/translators/providers/mymemory');
+    await mymemoryProvider.translate(['你好'], 'AUTO', 'en');
+
+    const url = new URL(mockFetch.mock.calls[0]![0] as string);
+    expect(url.searchParams.get('langpair')).toBe('Autodetect|en');
+  });
+
+  it('surfaces an in-body error instead of echoing the source text', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        responseStatus: 403,
+        responseDetails: 'QUERY LENGTH LIMIT EXCEEDED. MAX ALLOWED QUERY : 500 CHARS',
+      }),
+    });
+
+    const { mymemoryProvider } = await import('@/services/translators/providers/mymemory');
+    await expect(mymemoryProvider.translate(['Hello'], 'en', 'fr')).rejects.toThrow(
+      'QUERY LENGTH LIMIT EXCEEDED',
+    );
+  });
+
+  it('chunks paragraphs above the 500-character single-request cap', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ responseStatus: 200, responseData: { translatedText: 'x' } }),
+    });
+
+    const { mymemoryProvider } = await import('@/services/translators/providers/mymemory');
+    await mymemoryProvider.translate(['a'.repeat(1001)], 'en', 'fr');
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    for (const call of mockFetch.mock.calls) {
+      const url = new URL(call[0] as string);
+      expect((url.searchParams.get('q') ?? '').length).toBeLessThanOrEqual(500);
+    }
+  });
+
+  it('has correct provider metadata', async () => {
+    const { mymemoryProvider } = await import('@/services/translators/providers/mymemory');
+    expect(mymemoryProvider.name).toBe('mymemory');
+    expect(mymemoryProvider.label).toBe('MyMemory');
+    expect(mymemoryProvider.preservesMarkup).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Yandex Translate Provider
 // ---------------------------------------------------------------------------
 describe('yandexProvider', () => {
@@ -1287,24 +1380,18 @@ describe('provider registry availability handling', () => {
   // each test would re-evaluate the full import chain and churn module
   // state for no benefit.
 
-  it('keeps yandex in getTranslators() so the UI can render it', async () => {
+  it('exposes only the keyless providers', async () => {
     const { getTranslators } = await import('@/services/translators/providers');
     const names = getTranslators().map((t) => t.name);
-    expect(names).toContain('yandex');
+    expect(names).toEqual(['mymemory', 'google']);
   });
 
-  it('requires authentication for yandex only in web builds', async () => {
-    const { getTranslator, isTranslatorAvailable } = await import(
-      '@/services/translators/providers'
-    );
-    const yandex = getTranslator('yandex')!;
-
-    vi.mocked(isTauriAppPlatform).mockReturnValue(false);
-    expect(isTranslatorAvailable(yandex, false)).toBe(false);
-    expect(isTranslatorAvailable(yandex, true)).toBe(true);
-
-    vi.mocked(isTauriAppPlatform).mockReturnValue(true);
-    expect(isTranslatorAvailable(yandex, false)).toBe(true);
+  it('drops the login-backed providers from the registry', async () => {
+    const { getTranslator } = await import('@/services/translators/providers');
+    const lookup = getTranslator as (name: string) => unknown;
+    expect(lookup('deepl')).toBeUndefined();
+    expect(lookup('azure')).toBeUndefined();
+    expect(lookup('yandex')).toBeUndefined();
   });
 
   it('isTranslatorAvailable returns false for disabled providers', async () => {
@@ -1346,10 +1433,8 @@ describe('preservesMarkup capability', () => {
       .filter((translator) => translator.preservesMarkup)
       .map((translator) => translator.name)
       .sort();
-    // Bing/Azure and Google both reposition inline tags onto the matching
-    // words. DeepL must stay out: it drops <em> outright and empties <b> when a
-    // sentence also carries <i>, so markup would claim formatting that is not
-    // there. Yandex is simply unverified.
-    expect(capable).toEqual(['azure', 'google']);
+    // Google repositions inline tags onto the matching words. MyMemory is
+    // plain-text only and would scramble markup, so it must stay out.
+    expect(capable).toEqual(['google']);
   });
 });

@@ -21,8 +21,6 @@ import type {
 } from './types';
 import { BUILTIN_PROVIDER_IDS } from './types';
 import { isSystemDictionarySupported } from './systemDictionary';
-import { wiktionaryProvider } from './providers/wiktionaryProvider';
-import { wikipediaProvider } from './providers/wikipediaProvider';
 import { createStarDictProvider, type DictionaryFileOpener } from './providers/starDictProvider';
 import { createMdictProvider } from './providers/mdictProvider';
 import { createDictProvider } from './providers/dictProvider';
@@ -46,15 +44,6 @@ interface RegistryArgs {
   fs?: DictionaryFileOpener;
 }
 
-const builtinFor = (id: string): DictionaryProvider | undefined => {
-  if (id === BUILTIN_PROVIDER_IDS.wiktionary) return wiktionaryProvider;
-  if (id === BUILTIN_PROVIDER_IDS.wikipedia) return wikipediaProvider;
-  // System dictionary is a sentinel — it has no in-popup UI. The
-  // annotator handles it before reaching the popup; the registry
-  // filters it out of `getEnabledProviders` so no empty tab appears.
-  return undefined;
-};
-
 /**
  * Resolve a `web:*` id to its template — built-in if id starts with
  * `web:builtin:`, else look it up in `settings.webSearches`.
@@ -75,11 +64,8 @@ const getOrCreate = (
 ): DictionaryProvider | undefined => {
   const cached = instanceCache.get(id);
   if (cached) return cached;
-  const builtin = builtinFor(id);
-  if (builtin) {
-    instanceCache.set(id, builtin);
-    return builtin;
-  }
+  // Built-in definition providers (Wikipedia/Wiktionary) were removed from
+  // this build; `builtin:` ids no longer resolve to a provider.
   if (id.startsWith('web:')) {
     const tpl = findWebTemplate(id, settings);
     if (!tpl) return undefined;

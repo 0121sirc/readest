@@ -623,9 +623,9 @@ describe('customDictionaryStore — loadCustomDictionaries reconciliation', () =
     const after = useCustomDictionaryStore.getState().settings;
     expect(after.providerOrder.includes('imp1')).toBe(false);
     expect('imp1' in after.providerEnabled).toBe(false);
-    // Builtins remain untouched.
-    expect(after.providerOrder.includes('builtin:wikipedia')).toBe(true);
-    expect(after.providerEnabled['builtin:wikipedia']).toBe(true);
+    // Removed built-ins (Wikipedia/Wiktionary) are stripped too.
+    expect(after.providerOrder.includes('builtin:wikipedia')).toBe(false);
+    expect('builtin:wikipedia' in after.providerEnabled).toBe(false);
   });
 
   it('keeps providerOrder + providerEnabled entries with no matching customDictionaries row (in-flight pull)', async () => {
@@ -689,26 +689,16 @@ describe('customDictionaryStore — loadCustomDictionaries reconciliation', () =
     await useCustomDictionaryStore.getState().loadCustomDictionaries(fakeEnv);
 
     const after = useCustomDictionaryStore.getState().settings;
-    // Existing order is preserved; default-builtin backfill runs first.
-    // Orphan providerEnabled keys are inserted BEFORE the first builtin
-    // so user-imported dicts stay at the top of the list (rather than
-    // stranded after the builtins where the user might miss them).
-    // Existing imp-known is already after builtins (intentional user
-    // choice persisted in providerOrder) so it stays put. The
-    // `builtin:system` sentinel was added in the default order when
-    // the system-dictionary provider landed; backfill appends it
-    // after the persisted builtins on hydration.
+    // Removed built-ins (Wikipedia/Wiktionary + built-in web searches) are
+    // stripped on load. The persisted `imp-known` slot is preserved, the
+    // `builtin:system` default sentinel is backfilled, and orphan
+    // providerEnabled keys are inserted BEFORE the first builtin so
+    // user-imported dicts stay at the top of the list.
     expect(after.providerOrder).toEqual([
+      'imp-known',
       'imp-orphaned-1',
       'imp-orphaned-2',
-      'builtin:wiktionary',
-      'builtin:wikipedia',
-      'imp-known',
       'builtin:system',
-      'web:builtin:google',
-      'web:builtin:urban',
-      'web:builtin:merriam-webster',
-      'web:builtin:goodreads',
     ]);
   });
 

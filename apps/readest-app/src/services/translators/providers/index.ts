@@ -1,8 +1,6 @@
 import { TranslationProvider } from '../types';
-import { deeplProvider } from './deepl';
-import { azureProvider } from './azure';
+import { mymemoryProvider } from './mymemory';
 import { googleProvider } from './google';
-import { yandexProvider } from './yandex';
 
 function createTranslator<T extends string>(
   name: T,
@@ -16,16 +14,15 @@ function createTranslator<T extends string>(
   return implementation as TranslationProvider & { name: T };
 }
 
-const deeplTranslator = createTranslator('deepl', deeplProvider);
-const azureTranslator = createTranslator('azure', azureProvider);
+const mymemoryTranslator = createTranslator('mymemory', mymemoryProvider);
 const googleTranslator = createTranslator('google', googleProvider);
-const yandexTranslator = createTranslator('yandex', yandexProvider);
 
+// Auth/login-backed providers (DeepL, Azure/Bing, Yandex) were removed from
+// this build; only keyless providers remain. Their files are kept for
+// reference. MyMemory is first so it is the default fallback.
 const availableTranslators = [
-  deeplTranslator,
-  azureTranslator,
+  mymemoryTranslator,
   googleTranslator,
-  yandexTranslator,
   // Add more translators here
 ];
 

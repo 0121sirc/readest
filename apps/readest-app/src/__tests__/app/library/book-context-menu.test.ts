@@ -26,7 +26,6 @@ describe('getBookContextMenuItemIds', () => {
       'showInFinder',
       'searchGoodreads',
       'upload',
-      'share',
       'delete',
     ]);
   });
@@ -88,7 +87,6 @@ describe('getBookContextMenuItemIds', () => {
       'showInFinder',
       'searchGoodreads',
       'upload',
-      'share',
       'delete',
     ]);
   });
@@ -105,7 +103,6 @@ describe('getBookContextMenuItemIds', () => {
       'showInFinder',
       'searchGoodreads',
       'upload',
-      'share',
       'delete',
     ]);
   });
@@ -121,7 +118,6 @@ describe('getBookContextMenuItemIds', () => {
       'showInFinder',
       'searchGoodreads',
       'upload',
-      'share',
       'delete',
     ]);
   });
@@ -137,12 +133,11 @@ describe('getBookContextMenuItemIds', () => {
       'showInFinder',
       'searchGoodreads',
       'download',
-      'share',
       'delete',
     ]);
   });
 
-  it('omits download/upload/share for a book that is neither downloaded nor uploaded', () => {
+  it('omits download/upload for a book that is neither downloaded nor uploaded', () => {
     const book = createBook({ filePath: '/some/external/file.epub' });
     expect(getBookContextMenuItemIds(book)).toEqual([
       'select',
@@ -159,7 +154,7 @@ describe('getBookContextMenuItemIds', () => {
   // Issue #5307 — a feed subscription has no file anywhere: the cloud has
   // nothing to upload it to and nothing to hand a share link. Offering those
   // actions only produces a failed transfer.
-  it('omits download/upload/share for a feed book (issue #5307)', () => {
+  it('omits download/upload for a feed book (issue #5307)', () => {
     const book = createBook({
       downloadedAt: 1,
       url: buildFeedBookUrl('https://www.saastr.com/feed/'),

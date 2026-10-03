@@ -22,36 +22,27 @@ const publishDictDelete = (contentId: string): void => {
 };
 
 /**
- * Built-in web-search ids are seeded into `providerOrder` but disabled by
- * default — users opt in. This preserves the principle that we don't push
- * users onto external pages without consent, while still surfacing the
- * options in the settings list.
+ * Built-in definition providers (Wikipedia/Wiktionary) and hardcoded web
+ * searches removed from this build. They are stripped from persisted
+ * order/enabled on load so existing installs stop showing them; the provider
+ * code itself is kept for reference.
  */
-const BUILTIN_WEB_ORDER = [
+const REMOVED_PROVIDER_IDS = new Set<string>([
+  BUILTIN_PROVIDER_IDS.wiktionary,
+  BUILTIN_PROVIDER_IDS.wikipedia,
   BUILTIN_WEB_SEARCH_IDS.google,
   BUILTIN_WEB_SEARCH_IDS.urban,
   BUILTIN_WEB_SEARCH_IDS.merriamWebster,
   BUILTIN_WEB_SEARCH_IDS.goodreads,
-];
+]);
 
 const DEFAULT_DICTIONARY_SETTINGS: DictionarySettings = {
-  providerOrder: [
-    BUILTIN_PROVIDER_IDS.systemDictionary,
-    BUILTIN_PROVIDER_IDS.wiktionary,
-    BUILTIN_PROVIDER_IDS.wikipedia,
-    ...BUILTIN_WEB_ORDER,
-  ],
+  providerOrder: [BUILTIN_PROVIDER_IDS.systemDictionary],
   providerEnabled: {
     // System dictionary is opt-in — enabling it disables the rest (and
     // vice versa) via the settings UI's exclusivity rule. Default off
     // so existing users see no behavior change on upgrade.
     [BUILTIN_PROVIDER_IDS.systemDictionary]: false,
-    [BUILTIN_PROVIDER_IDS.wiktionary]: true,
-    [BUILTIN_PROVIDER_IDS.wikipedia]: true,
-    [BUILTIN_WEB_SEARCH_IDS.google]: false,
-    [BUILTIN_WEB_SEARCH_IDS.urban]: false,
-    [BUILTIN_WEB_SEARCH_IDS.merriamWebster]: false,
-    [BUILTIN_WEB_SEARCH_IDS.goodreads]: false,
   },
   webSearches: [],
   fontScale: 1,
@@ -583,7 +574,9 @@ export const useCustomDictionaryStore = create<DictionaryStoreState>((set, get) 
       // For providerOrder, we append any newly-defaulted ids (like the
       // built-in web searches added in this release) so existing users see
       // them appear at the end of the list.
-      const persistedOrder = persistedSettings.providerOrder.filter(dropTombstoned);
+      const persistedOrder = persistedSettings.providerOrder
+        .filter(dropTombstoned)
+        .filter((id) => !REMOVED_PROVIDER_IDS.has(id));
       const orderSet = new Set(persistedOrder);
       const merged: string[] = persistedOrder.length
         ? [...persistedOrder]
@@ -595,7 +588,9 @@ export const useCustomDictionaryStore = create<DictionaryStoreState>((set, get) 
         }
       }
       const persistedEnabled = Object.fromEntries(
-        Object.entries(persistedSettings.providerEnabled).filter(([id]) => dropTombstoned(id)),
+        Object.entries(persistedSettings.providerEnabled).filter(
+          ([id]) => dropTombstoned(id) && !REMOVED_PROVIDER_IDS.has(id),
+        ),
       );
       // Collect providerEnabled keys that have no slot in providerOrder.
       // Settings replica pushes are per-field LWW: a Device A push that
@@ -633,7 +628,11 @@ export const useCustomDictionaryStore = create<DictionaryStoreState>((set, get) 
           ...DEFAULT_DICTIONARY_SETTINGS.providerEnabled,
           ...persistedEnabled,
         },
-        defaultProviderId: persistedSettings.defaultProviderId,
+        defaultProviderId:
+          persistedSettings.defaultProviderId &&
+          !REMOVED_PROVIDER_IDS.has(persistedSettings.defaultProviderId)
+            ? persistedSettings.defaultProviderId
+            : undefined,
         webSearches: persistedSettings.webSearches ?? [],
         fontScale: persistedSettings.fontScale ?? DEFAULT_DICTIONARY_SETTINGS.fontScale,
         autoPlayPronunciation:

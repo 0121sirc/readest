@@ -14,7 +14,7 @@ import { getLocale } from '@/utils/misc';
 import { useTranslation } from './useTranslation';
 
 export function useTranslator({
-  provider = 'deepl',
+  provider = 'mymemory',
   sourceLang = 'AUTO',
   targetLang = 'EN',
   enablePolishing = true,
@@ -150,7 +150,7 @@ export function useTranslator({
             ),
             type: 'error',
           });
-          setSelectedProvider('azure');
+          setSelectedProvider('mymemory');
         }
         setLoading(false);
         throw err instanceof Error ? err : new Error(String(err));

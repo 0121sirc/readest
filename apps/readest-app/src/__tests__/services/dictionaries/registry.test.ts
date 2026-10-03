@@ -8,10 +8,10 @@ import type {
 } from '@/services/dictionaries/types';
 
 const baseSettings: DictionarySettings = {
-  providerOrder: [BUILTIN_PROVIDER_IDS.wiktionary, BUILTIN_PROVIDER_IDS.wikipedia],
+  providerOrder: [BUILTIN_WEB_SEARCH_IDS.google, BUILTIN_WEB_SEARCH_IDS.urban],
   providerEnabled: {
-    [BUILTIN_PROVIDER_IDS.wiktionary]: true,
-    [BUILTIN_PROVIDER_IDS.wikipedia]: true,
+    [BUILTIN_WEB_SEARCH_IDS.google]: true,
+    [BUILTIN_WEB_SEARCH_IDS.urban]: true,
   },
 };
 
@@ -20,12 +20,26 @@ describe('dictionary registry', () => {
     __resetRegistryForTests();
   });
 
-  it('returns builtin providers in order, both enabled', () => {
+  it('returns built-in web-search providers in order, both enabled', () => {
     const providers = getEnabledProviders({ settings: baseSettings, dictionaries: [] });
     expect(providers.map((p) => p.id)).toEqual([
-      BUILTIN_PROVIDER_IDS.wiktionary,
-      BUILTIN_PROVIDER_IDS.wikipedia,
+      BUILTIN_WEB_SEARCH_IDS.google,
+      BUILTIN_WEB_SEARCH_IDS.urban,
     ]);
+  });
+
+  it('drops retired built-in definition providers', () => {
+    const providers = getEnabledProviders({
+      settings: {
+        providerOrder: [BUILTIN_PROVIDER_IDS.wiktionary, BUILTIN_PROVIDER_IDS.wikipedia],
+        providerEnabled: {
+          [BUILTIN_PROVIDER_IDS.wiktionary]: true,
+          [BUILTIN_PROVIDER_IDS.wikipedia]: true,
+        },
+      },
+      dictionaries: [],
+    });
+    expect(providers).toEqual([]);
   });
 
   it('skips providers explicitly disabled', () => {
@@ -34,25 +48,25 @@ describe('dictionary registry', () => {
         ...baseSettings,
         providerEnabled: {
           ...baseSettings.providerEnabled,
-          [BUILTIN_PROVIDER_IDS.wikipedia]: false,
+          [BUILTIN_WEB_SEARCH_IDS.urban]: false,
         },
       },
       dictionaries: [],
     });
-    expect(providers.map((p) => p.id)).toEqual([BUILTIN_PROVIDER_IDS.wiktionary]);
+    expect(providers.map((p) => p.id)).toEqual([BUILTIN_WEB_SEARCH_IDS.google]);
   });
 
   it('honors providerOrder regardless of declaration order', () => {
     const providers = getEnabledProviders({
       settings: {
         ...baseSettings,
-        providerOrder: [BUILTIN_PROVIDER_IDS.wikipedia, BUILTIN_PROVIDER_IDS.wiktionary],
+        providerOrder: [BUILTIN_WEB_SEARCH_IDS.urban, BUILTIN_WEB_SEARCH_IDS.google],
       },
       dictionaries: [],
     });
     expect(providers.map((p) => p.id)).toEqual([
-      BUILTIN_PROVIDER_IDS.wikipedia,
-      BUILTIN_PROVIDER_IDS.wiktionary,
+      BUILTIN_WEB_SEARCH_IDS.urban,
+      BUILTIN_WEB_SEARCH_IDS.google,
     ]);
   });
 
@@ -143,23 +157,14 @@ describe('dictionary registry', () => {
       },
     ];
     const settings: DictionarySettings = {
-      providerOrder: [
-        BUILTIN_PROVIDER_IDS.wiktionary,
-        'mdict:available',
-        'mdict:gone',
-        'stardict:nope',
-      ],
+      providerOrder: ['mdict:available', 'mdict:gone', 'stardict:nope'],
       providerEnabled: {
-        [BUILTIN_PROVIDER_IDS.wiktionary]: true,
         'mdict:available': true,
         'mdict:gone': true,
         'stardict:nope': true,
       },
     };
     const providers = getEnabledProviders({ settings, dictionaries: dicts, fs });
-    expect(providers.map((p) => p.id)).toEqual([
-      BUILTIN_PROVIDER_IDS.wiktionary,
-      'mdict:available',
-    ]);
+    expect(providers.map((p) => p.id)).toEqual(['mdict:available']);
   });
 });
