@@ -86,6 +86,7 @@ export const withCloudProviderEnabled = (
 const persistCloudSyncSelection = async (
   envConfig: EnvConfigType,
   apply: (settings: SystemSettings) => SystemSettings,
+  connectionKind?: string,
 ): Promise<SystemSettings> => {
   const store = useSettingsStore.getState();
   const appService = await envConfig.getAppService();
@@ -93,7 +94,10 @@ const persistCloudSyncSelection = async (
   const next = apply(current);
   store.setSettings(next);
   await appService.saveSettings(next);
-  void broadcastGlobalSettings(next, { includeCloudSyncProviders: true });
+  void broadcastGlobalSettings(next, {
+    includeCloudSyncProviders: true,
+    connectionChanged: connectionKind ? [connectionKind] : undefined,
+  });
   return next;
 };
 
@@ -112,8 +116,12 @@ export const persistCloudProviderEnabled = async (
   enabled: boolean,
   mutate: (settings: SystemSettings) => SystemSettings = (s) => s,
 ): Promise<SystemSettings> =>
-  persistCloudSyncSelection(envConfig, (current) =>
-    withCloudProviderEnabled(mutate(current), kind, enabled),
+  persistCloudSyncSelection(
+    envConfig,
+    (current) => withCloudProviderEnabled(mutate(current), kind, enabled),
+    // Readest Cloud carries no device-side connection slice; every third-party
+    // backend does, so other tabs re-read that slice from disk.
+    kind === 'readest' ? undefined : kind,
   );
 
 /**

@@ -169,6 +169,21 @@ describe('webdav proxy forwarding', () => {
     expect(seenDuringFetch).toBeUndefined();
   });
 
+  it('re-exposes the upstream size as x-content-length, never content-length', async () => {
+    const upstream = new Response(null, { status: 200, headers: { etag: '"abc"' } });
+    upstream.headers.set('content-length', '12345');
+    fetchSpy.mockResolvedValueOnce(upstream);
+
+    const res = await POST(proxyReq('https://dav.example.com/book.epub', 'HEAD'));
+
+    expect(res.status).toBe(200);
+    // A bodyless proxied response must not inherit the file's length, or the
+    // browser aborts with ERR_CONTENT_LENGTH_MISMATCH.
+    expect(res.headers.get('content-length')).toBeNull();
+    expect(res.headers.get('x-content-length')).toBe('12345');
+    expect(res.headers.get('etag')).toBe('"abc"');
+  });
+
   it('renames WWW-Authenticate instead of forwarding it (no browser dialog)', async () => {
     fetchSpy.mockResolvedValueOnce(
       new Response('denied', {

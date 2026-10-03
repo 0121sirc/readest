@@ -9,6 +9,7 @@ import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useTranslation } from '@/hooks/useTranslation';
 import { debounce } from '@/utils/debounce';
 import { eventDispatcher } from '@/utils/event';
+import { withWebLock } from '@/utils/webLock';
 import type { BookNote } from '@/types/book';
 import { FileSyncEngine } from '@/services/sync/file/engine';
 import { FileSyncError } from '@/services/sync/file/provider';
@@ -544,11 +545,23 @@ export const useFileSync = (bookKey: string) => {
   ]);
 
   // Stash the latest callbacks in a ref so the event-bridge effect doesn't
-  // re-bind on every render (pattern from useKOSync).
+  // re-bind on every render (pattern from useKOSync). Every entry point goes
+  // through a per-book Web Lock so two tabs reading the same book can't write
+  // its config/cover concurrently.
+  const withBookLock = useCallback(
+    <T>(task: () => Promise<T>): Promise<T | undefined> =>
+      withWebLock(`readest:file-sync:book:${bookKey}`, task),
+    [bookKey],
+  );
   const syncRefs = useRef({ pushNow, pullNow, pushBookFileNow, pushBookCoverNow });
   useEffect(() => {
-    syncRefs.current = { pushNow, pullNow, pushBookFileNow, pushBookCoverNow };
-  }, [pushNow, pullNow, pushBookFileNow, pushBookCoverNow]);
+    syncRefs.current = {
+      pushNow: () => withBookLock(() => pushNow()).then(() => undefined),
+      pullNow: async () => (await withBookLock(() => pullNow())) ?? false,
+      pushBookFileNow: () => withBookLock(() => pushBookFileNow()).then(() => undefined),
+      pushBookCoverNow: () => withBookLock(() => pushBookCoverNow()).then(() => undefined),
+    };
+  }, [pushNow, pullNow, pushBookFileNow, pushBookCoverNow, withBookLock]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const debouncedPush = useCallback(
@@ -580,7 +593,7 @@ export const useFileSync = (bookKey: string) => {
         await syncRefs.current.pushNow();
       }
       await Promise.all([syncRefs.current.pushBookCoverNow(), syncRefs.current.pushBookFileNow()]);
-    })();
+    })().catch((e) => console.warn('file sync open-book pass failed', e));
   }, [isReady, progress?.location]);
 
   // Auto-push on progress changes (debounced; the dirty check short-circuits).

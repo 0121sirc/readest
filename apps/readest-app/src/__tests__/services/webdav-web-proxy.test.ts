@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { checkConnection } from '@/services/sync/providers/webdav/client';
+import { checkConnection, headFile } from '@/services/sync/providers/webdav/client';
 
 // In the web build the WebDAV client must not hit the server directly (a
 // preflighted PROPFIND is blocked by CORS); it tunnels through our own
@@ -57,5 +57,21 @@ describe('web WebDAV transport', () => {
 
     const headers = fetchMock.mock.calls[0]![1].headers as Headers;
     expect(headers.get('x-readest-webdav-insecure')).toBeNull();
+  });
+
+  test('headFile reads the size from x-content-length', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(null, {
+        status: 200,
+        headers: { 'x-content-length': '4242', etag: '"e"' },
+      }),
+    );
+
+    const head = await headFile(
+      { serverUrl: 'https://dav.example.com', username: 'alice', password: 'secret' },
+      '/Readest/library.json',
+    );
+
+    expect(head).toEqual({ size: 4242, etag: '"e"' });
   });
 });

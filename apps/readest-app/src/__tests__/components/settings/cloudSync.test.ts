@@ -156,6 +156,7 @@ describe('persistCloudProviderEnabled', () => {
     expect(saveSettings).toHaveBeenCalledWith(next);
     expect(mockBroadcastGlobalSettings).toHaveBeenCalledWith(next, {
       includeCloudSyncProviders: true,
+      connectionChanged: ['gdrive'],
     });
   });
 
@@ -175,6 +176,7 @@ describe('persistCloudProviderEnabled', () => {
     expect(saveSettings).toHaveBeenCalledWith(next);
     expect(mockBroadcastGlobalSettings).toHaveBeenCalledWith(next, {
       includeCloudSyncProviders: true,
+      connectionChanged: ['webdav'],
     });
   });
 

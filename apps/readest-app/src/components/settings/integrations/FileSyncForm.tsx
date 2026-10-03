@@ -18,6 +18,7 @@ import {
   type FileSyncBackendKind,
 } from '@/services/sync/file/providerRegistry';
 import type { KOSyncStrategy } from '@/types/settings';
+import { withWebLock } from '@/utils/webLock';
 import { BoxedList, SettingsRow, SettingsSelect, SettingsSwitchRow } from '../primitives';
 
 /** The settings fields the shared sync controls read/write (WebDAV + Drive share these). */
@@ -142,36 +143,40 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
     }
 
     try {
-      const provider = await createFileSyncProvider(kind, settings);
-      if (!provider) {
-        throw new FileSyncError('Sync backend is not available on this device', 'UNKNOWN');
-      }
-      const store = createAppLocalStore({ appService, settings, envConfig });
-      const engine = new FileSyncEngine(provider, store);
-      const result = await engine.syncLibrary(currentLibrary, {
-        strategy: stored.strategy === 'prompt' ? 'silent' : stored.strategy,
-        syncBooks: stored.syncBooks ?? false,
-        fullSync: stored.fullSync ?? false,
-        deviceId: deviceId as string,
-        onProgress: ({ book, index, total, action }) => {
-          const actionStr = action === 'downloading' ? _('Downloading') : _('Uploading');
-          updateProgress(
-            kind,
-            _('{{action}} {{n}} / {{total}}', { action: actionStr, n: index + 1, total }),
-            book.title || book.hash.slice(0, 8),
-          );
-        },
-      });
-
-      const failure = formatSyncFailure(result, _);
-      setLastError(kind, failure);
-      if (!failure) {
-        await persist({ lastSyncedAt: Date.now() });
-        eventDispatcher.dispatch('toast', {
-          type: 'info',
-          message: _('{{count}} book(s) synced', { count: result.booksSynced }),
+      // Serialize with other tabs: a manual run waits for any in-progress
+      // library pass rather than racing it on the same remote index.
+      await withWebLock('readest:file-sync', async () => {
+        const provider = await createFileSyncProvider(kind, settings);
+        if (!provider) {
+          throw new FileSyncError('Sync backend is not available on this device', 'UNKNOWN');
+        }
+        const store = createAppLocalStore({ appService, settings, envConfig });
+        const engine = new FileSyncEngine(provider, store);
+        const result = await engine.syncLibrary(currentLibrary, {
+          strategy: stored.strategy === 'prompt' ? 'silent' : stored.strategy,
+          syncBooks: stored.syncBooks ?? false,
+          fullSync: stored.fullSync ?? false,
+          deviceId: deviceId as string,
+          onProgress: ({ book, index, total, action }) => {
+            const actionStr = action === 'downloading' ? _('Downloading') : _('Uploading');
+            updateProgress(
+              kind,
+              _('{{action}} {{n}} / {{total}}', { action: actionStr, n: index + 1, total }),
+              book.title || book.hash.slice(0, 8),
+            );
+          },
         });
-      }
+
+        const failure = formatSyncFailure(result, _);
+        setLastError(kind, failure);
+        if (!failure) {
+          await persist({ lastSyncedAt: Date.now() });
+          eventDispatcher.dispatch('toast', {
+            type: 'info',
+            message: _('{{count}} book(s) synced', { count: result.booksSynced }),
+          });
+        }
+      });
     } catch (e) {
       setLastError(kind, e instanceof Error ? e.message : String(e));
       eventDispatcher.dispatch('toast', { type: 'error', message: formatSyncError(_, e) });

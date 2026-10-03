@@ -754,7 +754,8 @@ export const headFile = async (
   if (response.status < 200 || response.status >= 300) {
     throw new WebDAVRequestError(`HEAD failed with status ${response.status}`, response.status);
   }
-  const sizeHeader = response.headers.get('content-length');
+  const sizeHeader =
+    response.headers.get('content-length') ?? response.headers.get('x-content-length');
   const etag = response.headers.get('etag') ?? undefined;
   const size = sizeHeader ? Number(sizeHeader) : undefined;
   return { size: Number.isFinite(size) ? (size as number) : undefined, etag };

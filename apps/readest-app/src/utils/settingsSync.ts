@@ -64,7 +64,41 @@ export interface SettingsSyncPayload {
    * revert someone else's switch.
    */
   cloudSyncProviders?: CloudSyncProviderFlags;
+  /**
+   * File-sync backends whose CONNECTION fields (server URL / credentials)
+   * changed on the sending window. The receiver re-reads those slices from the
+   * shared `settings.json` rather than having credentials ride the broadcast.
+   */
+  connectionChanged?: string[];
 }
+
+/** BroadcastChannel used for cross-tab settings sync on the web build. */
+const WEB_SETTINGS_CHANNEL = 'readest:global-settings';
+
+let webSourceLabel: string | null = null;
+
+/** Test seam: force the per-tab label so a single test context can act as two. */
+export const __setWebSourceLabelForTests = (label: string): void => {
+  webSourceLabel = label;
+};
+
+const getWebSourceLabel = (): string => {
+  if (!webSourceLabel) {
+    const id =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+    webSourceLabel = `web-${id}`;
+  }
+  return webSourceLabel;
+};
+
+let webSendChannel: BroadcastChannel | null = null;
+const getWebSendChannel = (): BroadcastChannel | null => {
+  if (typeof BroadcastChannel === 'undefined') return null;
+  if (!webSendChannel) webSendChannel = new BroadcastChannel(WEB_SETTINGS_CHANNEL);
+  return webSendChannel;
+};
 
 /**
  * Merge the global setting blobs broadcast by another window into this window's
@@ -112,13 +146,16 @@ export const mergeSyncedGlobalSettings = (
  */
 export const broadcastGlobalSettings = async (
   settings: SystemSettings,
-  opts: { includeCloudSyncProviders?: boolean } = {},
+  opts: { includeCloudSyncProviders?: boolean; connectionChanged?: string[] } = {},
 ): Promise<void> => {
-  if (!isTauriAppPlatform()) return;
   if (!settings.globalViewSettings || !settings.globalReadSettings) return;
+  const tauri = isTauriAppPlatform();
+  const channel = tauri ? null : getWebSendChannel();
+  // Off Tauri and without BroadcastChannel support there is nothing to do.
+  if (!tauri && !channel) return;
   try {
     const payload: SettingsSyncPayload = {
-      sourceLabel: getCurrentWindow().label,
+      sourceLabel: tauri ? getCurrentWindow().label : getWebSourceLabel(),
       bookshelves: settings.bookshelves,
       globalViewSettings: settings.globalViewSettings,
       globalReadSettings: settings.globalReadSettings,
@@ -153,7 +190,9 @@ export const broadcastGlobalSettings = async (
         };
       }
     }
-    await emit(SETTINGS_SYNC_EVENT, payload);
+    if (opts.connectionChanged?.length) payload.connectionChanged = opts.connectionChanged;
+    if (tauri) await emit(SETTINGS_SYNC_EVENT, payload);
+    else channel?.postMessage(payload);
   } catch (err) {
     console.warn('Failed to broadcast settings to other windows', err);
   }
@@ -167,10 +206,24 @@ export const broadcastGlobalSettings = async (
 export const subscribeSettingsSync = async (
   onReceive: (payload: SettingsSyncPayload) => void,
 ): Promise<UnlistenFn> => {
-  if (!isTauriAppPlatform()) return () => {};
-  const currentLabel = getCurrentWindow().label;
-  return listen<SettingsSyncPayload>(SETTINGS_SYNC_EVENT, ({ payload }) => {
-    if (!payload || payload.sourceLabel === currentLabel) return;
+  if (isTauriAppPlatform()) {
+    const currentLabel = getCurrentWindow().label;
+    return listen<SettingsSyncPayload>(SETTINGS_SYNC_EVENT, ({ payload }) => {
+      if (!payload || payload.sourceLabel === currentLabel) return;
+      onReceive(payload);
+    });
+  }
+  if (typeof BroadcastChannel === 'undefined') return () => {};
+  const channel = new BroadcastChannel(WEB_SETTINGS_CHANNEL);
+  const own = getWebSourceLabel();
+  const handler = (event: MessageEvent<SettingsSyncPayload>) => {
+    const payload = event.data;
+    if (!payload || payload.sourceLabel === own) return;
     onReceive(payload);
-  });
+  };
+  channel.addEventListener('message', handler);
+  return () => {
+    channel.removeEventListener('message', handler);
+    channel.close();
+  };
 };

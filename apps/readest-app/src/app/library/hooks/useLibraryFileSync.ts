@@ -43,7 +43,10 @@ export const useLibraryFileSync = () => {
   // Keep one stable debounced trigger that always calls the latest pass (via
   // ref), so it isn't recreated — and lost — on every settings change.
   const passRef = useRef<() => void>(() => {});
-  passRef.current = () => void runFileLibrarySyncPass(envConfig, _);
+  passRef.current = () =>
+    void runFileLibrarySyncPass(envConfig, _, { ifAvailable: true }).catch((e) =>
+      console.warn('file library auto-sync failed', e),
+    );
   const debouncedSync = useMemo(() => debounce(() => passRef.current(), SYNC_DEBOUNCE_MS), []);
   useEffect(() => () => debouncedSync.cancel(), [debouncedSync]);
 

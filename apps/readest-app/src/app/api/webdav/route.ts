@@ -58,9 +58,12 @@ const FORWARDED_REQUEST_HEADERS = [
 // `www-authenticate` is deliberately NOT forwarded: a 401 carrying it makes the
 // renderer open its native credential dialog for the `/api/webdav` response.
 // The challenge is renamed below so the client can still answer Digest.
+// `content-length` is deliberately absent: we re-frame the body (and a HEAD
+// probe answers a bodyless POST carrying the upstream size), so forwarding the
+// upstream length makes the browser abort with ERR_CONTENT_LENGTH_MISMATCH.
+// The size is surfaced as `x-content-length` instead, which the client reads.
 const FORWARDED_RESPONSE_HEADERS = new Set([
   'content-type',
-  'content-length',
   'content-range',
   'content-disposition',
   'accept-ranges',
@@ -69,6 +72,9 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
   'dav',
   'cache-control',
 ]);
+
+/** Upstream `Content-Length`, re-exposed under a name we control. */
+const CONTENT_LENGTH_HEADER = 'x-content-length';
 
 /** Renamed `WWW-Authenticate`, readable same-origin, safe for the renderer. */
 const AUTH_CHALLENGE_HEADER = 'x-readest-webdav-www-authenticate';
@@ -150,17 +156,19 @@ const validateTarget = (raw: string): URL => {
 
 const buildResponse = (upstream: Response): Response => {
   const headers = new Headers();
-  const encoded = upstream.headers.has('content-encoding');
   for (const [key, value] of upstream.headers) {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP.has(lower)) continue;
     if (!FORWARDED_RESPONSE_HEADERS.has(lower)) continue;
-    // The decoded body no longer matches a compressed Content-Length.
-    if (lower === 'content-length' && encoded) continue;
     headers.set(key, value);
   }
   headers.set('Cache-Control', 'no-store');
   headers.set('X-Content-Type-Options', 'nosniff');
+  // Surface the upstream size under our own header. HEAD probes need it, and it
+  // must not collide with the response framing the runtime computes for the
+  // body we actually emit.
+  const upstreamLength = upstream.headers.get('content-length');
+  if (upstreamLength) headers.set(CONTENT_LENGTH_HEADER, upstreamLength);
   // Hand the auth challenge to the client without the renderer's native dialog.
   const challenge = upstream.headers.get('www-authenticate');
   if (challenge) {

@@ -23,6 +23,7 @@ import {
 } from '@/services/sync/file/providerRegistry';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import { FileSyncEngine, type SyncLibraryResult } from '@/services/sync/file/engine';
+import { withWebLock } from '@/utils/webLock';
 
 /**
  * Whether a backend's transport can work at all right now. Web Google Drive
@@ -141,51 +142,56 @@ const syncOneBackend = async (
 export const runFileLibrarySyncPass = async (
   envConfig: EnvConfigType,
   _: TranslationFunc,
+  opts: { ifAvailable?: boolean } = {},
 ): Promise<SyncLibraryResult | null> => {
-  // Paused means paused (#4959): a downgraded account's still-enabled backends
-  // must not sync, and must not fall back to Readest Cloud either.
-  const backends = getActiveFileSyncBackends(useSettingsStore.getState().settings);
-  if (backends.length === 0) return null;
+  const run = async (): Promise<SyncLibraryResult | null> => {
+    // Paused means paused (#4959): a downgraded account's still-enabled backends
+    // must not sync, and must not fall back to Readest Cloud either.
+    const backends = getActiveFileSyncBackends(useSettingsStore.getState().settings);
+    if (backends.length === 0) return null;
 
-  // NEVER sync a library that is not loaded from disk: pushing an empty index
-  // would clobber the remote.
-  if (!useLibraryStore.getState().libraryLoaded) return null;
+    // NEVER sync a library that is not loaded from disk: pushing an empty index
+    // would clobber the remote.
+    if (!useLibraryStore.getState().libraryLoaded) return null;
 
-  if (!useFileSyncStore.getState().beginSync(backends[0]!, _('Syncing…'))) return null;
+    if (!useFileSyncStore.getState().beginSync(backends[0]!, _('Syncing…'))) return null;
 
-  let merged: SyncLibraryResult | null = null;
-  try {
-    for (let i = 0; i < backends.length; i++) {
-      const kind = backends[i]!;
-      if (i > 0) useFileSyncStore.getState().switchSync(kind, _('Syncing…'));
-      try {
-        const result = await syncOneBackend(envConfig, kind, _);
-        if (result) {
-          useFileSyncStore.getState().setLastError(kind, formatSyncFailure(result, _));
-          // Spread the latest counters, but ACCUMULATE everything that reports
-          // trouble — a plain spread let a healthy second mirror erase the
-          // first one's failures and its unwritten index (#5900).
-          merged = merged
-            ? {
-                ...result,
-                booksSynced: merged.booksSynced + result.booksSynced,
-                failures: merged.failures + result.failures,
-                failedBooks: [...merged.failedBooks, ...result.failedBooks],
-                indexPushFailed: merged.indexPushFailed || result.indexPushFailed,
-              }
-            : result;
+    let merged: SyncLibraryResult | null = null;
+    try {
+      for (let i = 0; i < backends.length; i++) {
+        const kind = backends[i]!;
+        if (i > 0) useFileSyncStore.getState().switchSync(kind, _('Syncing…'));
+        try {
+          const result = await syncOneBackend(envConfig, kind, _);
+          if (result) {
+            useFileSyncStore.getState().setLastError(kind, formatSyncFailure(result, _));
+            // Spread the latest counters, but ACCUMULATE everything that reports
+            // trouble — a plain spread let a healthy second mirror erase the
+            // first one's failures and its unwritten index (#5900).
+            merged = merged
+              ? {
+                  ...result,
+                  booksSynced: merged.booksSynced + result.booksSynced,
+                  failures: merged.failures + result.failures,
+                  failedBooks: [...merged.failedBooks, ...result.failedBooks],
+                  indexPushFailed: merged.indexPushFailed || result.indexPushFailed,
+                }
+              : result;
+          }
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          useFileSyncStore.getState().setLastError(kind, message);
+          console.warn('[cloudSync] library file sync failed', kind, e);
         }
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        useFileSyncStore.getState().setLastError(kind, message);
-        console.warn('[cloudSync] library file sync failed', kind, e);
       }
+    } finally {
+      const held = useFileSyncStore.getState().activeKind;
+      useFileSyncStore.getState().endSync(held ?? backends[0]!);
     }
-  } finally {
-    const held = useFileSyncStore.getState().activeKind;
-    useFileSyncStore.getState().endSync(held ?? backends[0]!);
-  }
-  return merged;
+    return merged;
+  };
+  const result = await withWebLock('readest:file-sync', run, { ifAvailable: opts.ifAvailable });
+  return result ?? null;
 };
 
 /**

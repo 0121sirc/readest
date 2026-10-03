@@ -114,7 +114,11 @@ export const useBooksSync = () => {
         let fileSynced = 0;
         let fileSucceeded = false;
         if (runFilePass) {
-          const result = await runFileLibrarySyncPass(envConfig, _);
+          const result = await runFileLibrarySyncPass(envConfig, _, {
+            // Boot / auto pulls skip when another tab is already syncing; an
+            // explicit (verbose) pull waits its turn so the user gets a result.
+            ifAvailable: !verbose,
+          });
           // A run that could not write library.json converged NOTHING, however
           // many books it uploaded: peers read membership, tombstones and the
           // uploaded-file record from that one file. Reporting it as "N books
