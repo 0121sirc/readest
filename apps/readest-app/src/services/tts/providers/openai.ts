@@ -18,14 +18,13 @@
 //     and non-PCM servers fall through with their bytes untouched.
 
 import type { TTSVoice } from '../types';
-import { getAPIBaseUrl } from '@/services/environment';
 import {
   getOpenAITTSConfig,
   isOpenAITTSConfigured,
-  OPENAI_TTS_RESPONSE_FORMAT,
   parseOpenAIVoices,
   setOpenAITTSConfig,
 } from './openaiConfig';
+import { fetchOpenAIVoices, synthesizeOpenAI } from './openaiEndpoint';
 import {
   SpeechProvider,
   SpeechSynthesisPermanentError,
@@ -107,33 +106,18 @@ export class OpenAISpeechProvider implements SpeechProvider {
   // The endpoint's sample rate (from /health) is adopted for PCM wrapping.
   async #fetchServerVoices(): Promise<string[]> {
     const config = getOpenAITTSConfig();
-    try {
-      const res = await fetch(`${getAPIBaseUrl()}/tts/openai/voices`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: config.baseUrl, apiKey: config.apiKey }),
-      });
-      if (!res.ok) return [];
-      const data = (await res.json()) as {
-        voices?: { id?: string }[];
-        sampleRate?: number;
-      };
-      if (typeof data.sampleRate === 'number' && data.sampleRate > 0) {
-        this.#sampleRate = data.sampleRate;
-      }
-      const ids = (data.voices ?? [])
-        .map((voice) => voice.id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0);
-      // Seed the default voice only when the user has not chosen one. A
-      // hand-entered voice (e.g. an Edge name like zh-CN-XiaoxiaoNeural) must
-      // survive a server that only advertises OpenAI aliases such as alloy.
-      if (ids.length > 0 && parseOpenAIVoices(config.voices).length === 0) {
-        setOpenAITTSConfig({ ...config, voices: ids.join(',') });
-      }
-      return ids;
-    } catch {
-      return [];
+    const { voices, sampleRate } = await fetchOpenAIVoices(config);
+    if (sampleRate !== undefined && sampleRate > 0) {
+      this.#sampleRate = sampleRate;
     }
+    const ids = voices.map((voice) => voice.id).filter((id) => id.length > 0);
+    // Seed the default voice only when the user has not chosen one. A
+    // hand-entered voice (e.g. an Edge name like zh-CN-XiaoxiaoNeural) must
+    // survive a server that only advertises OpenAI aliases such as alloy.
+    if (ids.length > 0 && parseOpenAIVoices(config.voices).length === 0) {
+      setOpenAITTSConfig({ ...config, voices: ids.join(',') });
+    }
+    return ids;
   }
 
   async getAllVoices(): Promise<TTSVoice[]> {
@@ -199,21 +183,9 @@ export class OpenAISpeechProvider implements SpeechProvider {
 
       // wav, matching what reference clients use: on self-hosted servers pcm
       // streaming is often much slower than a single wav response, and the
-      // browser decode path handles wav directly.
-      const response = await fetch(`${getAPIBaseUrl()}/tts/openai`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: config.baseUrl,
-          apiKey: config.apiKey,
-          // Omit an empty model entirely; many servers reject an unknown id.
-          model: config.model.trim() || undefined,
-          input: req.text,
-          voice: req.voice,
-          responseFormat: OPENAI_TTS_RESPONSE_FORMAT,
-        }),
-        signal,
-      });
+      // browser decode path handles wav directly. Direct on desktop, through
+      // the same-origin relay on web — see openaiEndpoint.ts.
+      const response = await synthesizeOpenAI(config, req.text, req.voice, signal);
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '');

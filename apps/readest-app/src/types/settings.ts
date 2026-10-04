@@ -309,6 +309,31 @@ export interface ICloudSettings {
 }
 
 /**
+ * User-configurable server endpoints and deployment flags.
+ *
+ * The web build receives these from the runtime-injected
+ * `window.__READEST_RUNTIME_CONFIG`; the desktop build is a static export with
+ * no such injection, so this slice lets a user point the app at their own
+ * deployment (TTS/AI/metadata/sync all ride on the Readest web API base)
+ * without a rebuild. Empty strings fall through to the runtime config and the
+ * baked `NEXT_PUBLIC_*` values, so an untouched slice changes nothing.
+ */
+export interface ServerSettings {
+  /** Readest web API base, e.g. `https://web.readest.com`. */
+  apiBaseUrl: string;
+  /** Readest Node API base; used by store IAP verification. */
+  nodeApiBaseUrl: string;
+  /** Supabase project URL (account/auth). */
+  supabaseUrl: string;
+  /** Supabase anon key (account/auth). */
+  supabaseAnonKey: string;
+  /** Self-hosted deployments unlock every premium feature. */
+  selfHosted?: boolean;
+  /** Hide the Readest account / official cloud surface. */
+  disableReadestAccount?: boolean;
+}
+
+/**
  * Readest Cloud's own library-sync switch. Readest Cloud used to be the
  * derived fallback — "on" whenever no third-party provider was enabled —
  * because exactly one provider could own the library channels. Providers are
@@ -546,6 +571,7 @@ export interface SystemSettings {
   s3: S3Settings;
   onedrive: OneDriveSettings;
   icloud: ICloudSettings;
+  server: ServerSettings;
 
   aiSettings: AISettings;
   /**

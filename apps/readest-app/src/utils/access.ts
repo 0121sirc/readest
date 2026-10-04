@@ -5,6 +5,7 @@ import { DEFAULT_DAILY_TRANSLATION_QUOTA, DEFAULT_STORAGE_QUOTA } from '@/servic
 import { isWebAppPlatform } from '@/services/environment';
 import { getDailyUsage } from '@/services/translators/utils';
 import { getRuntimeConfig } from '@/services/runtimeConfig';
+import { getServerConfig } from '@/services/serverConfig';
 
 interface Token {
   plan: UserPlan;
@@ -172,11 +173,16 @@ export const PREMIUM_PLANS: readonly UserPlan[] = ['plus', 'pro'];
  * the browser, and straight from the environment on the server where the
  * window-injected config does not exist.
  */
-export const isSelfHosted = (): boolean =>
-  getRuntimeConfig()?.selfHosted === true ||
-  // `??` would stop at an empty string, so an explicitly blank SELF_HOSTED
-  // would mask NEXT_PUBLIC_SELF_HOSTED. `||` falls through on empty too.
-  (process.env['SELF_HOSTED'] || process.env['NEXT_PUBLIC_SELF_HOSTED']) === 'true';
+export const isSelfHosted = (): boolean => {
+  const server = getServerConfig();
+  if (server?.selfHosted !== undefined) return server.selfHosted;
+  return (
+    getRuntimeConfig()?.selfHosted === true ||
+    // `??` would stop at an empty string, so an explicitly blank SELF_HOSTED
+    // would mask NEXT_PUBLIC_SELF_HOSTED. `||` falls through on empty too.
+    (process.env['SELF_HOSTED'] || process.env['NEXT_PUBLIC_SELF_HOSTED']) === 'true'
+  );
+};
 
 /**
  * Local-first mode: hide the Readest account / official cloud surface and let
@@ -188,6 +194,8 @@ export const isSelfHosted = (): boolean =>
  * keep their original expectations without every test having to opt out.
  */
 export const isReadestAccountHidden = (): boolean => {
+  const server = getServerConfig();
+  if (server?.disableReadestAccount !== undefined) return server.disableReadestAccount;
   const config = getRuntimeConfig();
   if (config?.disableReadestAccount !== undefined) return config.disableReadestAccount;
   const raw = process.env['NEXT_PUBLIC_DISABLE_READEST_ACCOUNT'];

@@ -32,7 +32,7 @@ interface SingleInstancePayload {
   cwd: string;
 }
 
-const WEB_AUTH_CALLBACK = `${getBaseUrl()}/auth/callback`;
+const getWebAuthCallback = () => `${getBaseUrl()}/auth/callback`;
 const DEEPLINK_CALLBACK = 'readest://auth-callback';
 const USE_APPLE_SIGN_IN = process.env['NEXT_PUBLIC_USE_APPLE_SIGN_IN'] === 'true';
 
@@ -65,7 +65,7 @@ export default function AuthPage() {
       (process.env.NODE_ENV === 'production' || appService?.isMobileApp || USE_APPLE_SIGN_IN)
     ) {
       if (appService?.isMobileApp) {
-        return isOAuth ? DEEPLINK_CALLBACK : WEB_AUTH_CALLBACK;
+        return isOAuth ? DEEPLINK_CALLBACK : getWebAuthCallback();
       }
       return DEEPLINK_CALLBACK;
     }
@@ -77,7 +77,7 @@ export default function AuthPage() {
 
   const getWebRedirectTo = () => {
     return process.env.NODE_ENV === 'production'
-      ? WEB_AUTH_CALLBACK
+      ? getWebAuthCallback()
       : `${window.location.origin}/auth/callback`;
   };
 

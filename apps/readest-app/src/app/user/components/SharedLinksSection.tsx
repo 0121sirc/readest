@@ -11,6 +11,7 @@ import {
 import { PiDotsThreeVerticalBold } from 'react-icons/pi';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
+import { getAPIBaseUrl } from '@/services/environment';
 import { eventDispatcher } from '@/utils/event';
 import { listShares, revokeShare } from '@/libs/share';
 import { formatBytes } from '@/utils/book';
@@ -57,7 +58,7 @@ const ShareCover: React.FC<{ token: string; alt: string }> = ({ token, alt }) =>
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={`/api/share/${encodeURIComponent(token)}/cover`}
+      src={`${getAPIBaseUrl()}/share/${encodeURIComponent(token)}/cover`}
       alt={alt}
       onError={() => setFailed(true)}
       className='border-base-300 bg-base-200 h-14 w-10 shrink-0 rounded-sm border object-cover'

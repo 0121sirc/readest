@@ -8,7 +8,6 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { saveViewSettings } from '@/helpers/settings';
 import { getLocale } from '@/utils/misc';
 import { eventDispatcher } from '@/utils/event';
-import { getAPIBaseUrl } from '@/services/environment';
 import { SettingsPanelPanelProp } from './SettingsDialog';
 import {
   TTSHighlightGranularity,
@@ -24,11 +23,11 @@ import {
   OPENAI_TTS_MAX_LOOKAHEAD,
   OPENAI_TTS_MIN_BLOCK_PADDING_MS,
   OPENAI_TTS_MIN_LOOKAHEAD,
-  OPENAI_TTS_RESPONSE_FORMAT,
   OpenAITTSConfig,
   parseOpenAIVoices,
   setOpenAITTSConfig,
 } from '@/services/tts/providers/openaiConfig';
+import { fetchOpenAIVoices, synthesizeOpenAI } from '@/services/tts/providers/openaiEndpoint';
 import {
   BoxedList,
   SettingLabel,
@@ -119,35 +118,18 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
       let voice = parseOpenAIVoices(openaiTTSConfig.voices)[0] ?? '';
       if (!voice) {
         try {
-          const vr = await fetch(`${getAPIBaseUrl()}/tts/openai/voices`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              baseUrl: openaiTTSConfig.baseUrl,
-              apiKey: openaiTTSConfig.apiKey,
-            }),
-          });
-          if (vr.ok) {
-            const data = (await vr.json()) as { voices?: { id?: string }[] };
-            voice = data.voices?.[0]?.id ?? '';
-          }
+          const { voices } = await fetchOpenAIVoices(openaiTTSConfig);
+          voice = voices[0]?.id ?? '';
         } catch {
           // Fall through with an empty voice; the server may apply its default.
         }
       }
 
-      const res = await fetch(`${getAPIBaseUrl()}/tts/openai`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: openaiTTSConfig.baseUrl,
-          apiKey: openaiTTSConfig.apiKey,
-          model: openaiTTSConfig.model,
-          input: 'Hello, this is a test of the text to speech engine.',
-          voice,
-          responseFormat: OPENAI_TTS_RESPONSE_FORMAT,
-        }),
-      });
+      const res = await synthesizeOpenAI(
+        openaiTTSConfig,
+        'Hello, this is a test of the text to speech engine.',
+        voice,
+      );
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
         showToast(

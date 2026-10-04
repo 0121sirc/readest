@@ -13,8 +13,8 @@ import {
   serializeCustomHeaders,
 } from '@/utils/customHeaders';
 
-const OPDS_PROXY_URL = `${getAPIBaseUrl()}/opds/proxy`;
-const NODE_OPDS_PROXY_URL = `${getNodeAPIBaseUrl()}/opds/proxy`;
+const getOpdsProxyUrl = () => `${getAPIBaseUrl()}/opds/proxy`;
+const getNodeOpdsProxyUrl = () => `${getNodeAPIBaseUrl()}/opds/proxy`;
 /**
  * Extract username and password from URL credentials
  */
@@ -70,17 +70,17 @@ export const withOriginSuppressed = (headers: Record<string, string>): Record<st
     ? { Origin: '', ...headers }
     : headers;
 
-const PROXY_OVERRIDES: Record<string, string> = {
-  standardebooks: NODE_OPDS_PROXY_URL,
-};
+const getProxyOverrides = (): Record<string, string> => ({
+  standardebooks: getNodeOpdsProxyUrl(),
+});
 
 const getProxyBaseUrl = (url: string): string => {
-  for (const [domain, proxyUrl] of Object.entries(PROXY_OVERRIDES)) {
+  for (const [domain, proxyUrl] of Object.entries(getProxyOverrides())) {
     if (url.includes(domain)) {
       return proxyUrl;
     }
   }
-  return OPDS_PROXY_URL;
+  return getOpdsProxyUrl();
 };
 
 /**

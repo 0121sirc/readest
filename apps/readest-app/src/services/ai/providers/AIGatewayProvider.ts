@@ -4,6 +4,7 @@ import type { AIProvider, AISettings, AIProviderName } from '../types';
 import { aiLogger } from '../logger';
 import { GATEWAY_MODELS } from '../constants';
 import { AI_TIMEOUTS } from '../utils/retry';
+import { fetchGatewayRoute } from '../utils/gatewayRoute';
 import { createProxiedEmbeddingModel } from './ProxiedGatewayEmbedding';
 
 export class AIGatewayProvider implements AIProvider {
@@ -55,7 +56,7 @@ export class AIGatewayProvider implements AIProvider {
       const modelId = this.settings.aiGatewayModel || GATEWAY_MODELS.GEMINI_FLASH_LITE;
       aiLogger.provider.init('ai-gateway', `healthCheck starting with model: ${modelId}`);
 
-      const response = await fetch('/api/ai/chat', {
+      const response = await fetchGatewayRoute('chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

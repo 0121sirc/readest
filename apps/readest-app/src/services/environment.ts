@@ -1,6 +1,7 @@
 import { AppService } from '@/types/system';
 import { READEST_NODE_BASE_URL, READEST_WEB_BASE_URL } from './constants';
 import { getRuntimeConfig } from './runtimeConfig';
+import { getServerConfig } from './serverConfig';
 import { getOSPlatform } from '@/utils/misc';
 
 declare global {
@@ -14,12 +15,15 @@ export const isWebAppPlatform = () => process.env['NEXT_PUBLIC_APP_PLATFORM'] ==
 export const hasCli = () => window.__READEST_CLI_ACCESS === true;
 export const isPWA = () => window.matchMedia('(display-mode: standalone)').matches;
 export const getBaseUrl = () =>
-  getRuntimeConfig()?.apiBaseUrl ??
-  process.env['API_BASE_URL'] ??
-  process.env['NEXT_PUBLIC_API_BASE_URL'] ??
+  getServerConfig()?.apiBaseUrl ||
+  getRuntimeConfig()?.apiBaseUrl ||
+  process.env['API_BASE_URL'] ||
+  process.env['NEXT_PUBLIC_API_BASE_URL'] ||
   READEST_WEB_BASE_URL;
 export const getNodeBaseUrl = () =>
-  process.env['NEXT_PUBLIC_NODE_BASE_URL'] ?? READEST_NODE_BASE_URL;
+  getServerConfig()?.nodeApiBaseUrl ||
+  process.env['NEXT_PUBLIC_NODE_BASE_URL'] ||
+  READEST_NODE_BASE_URL;
 
 /**
  * Whether window move/resize has to be driven from JS with pointer events.
