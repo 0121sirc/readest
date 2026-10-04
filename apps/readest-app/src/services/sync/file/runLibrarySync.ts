@@ -23,6 +23,8 @@ import {
 } from '@/services/sync/file/providerRegistry';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import { FileSyncEngine, type SyncLibraryResult } from '@/services/sync/file/engine';
+import type { FileSyncProvider } from '@/services/sync/file/provider';
+import { syncAppSettings } from '@/services/sync/file/settingsSync';
 import { withWebLock } from '@/utils/webLock';
 
 /**
@@ -62,14 +64,14 @@ export const getReadyFileSyncBackends = (
 const buildEngine = async (
   envConfig: EnvConfigType,
   kind: FileSyncBackendKind,
-): Promise<FileSyncEngine | null> => {
+): Promise<{ engine: FileSyncEngine; provider: FileSyncProvider } | null> => {
   if (!canBackendRun(kind)) return null;
   const settings = useSettingsStore.getState().settings;
   const appService = await envConfig.getAppService();
   const fileProvider = await createFileSyncProvider(kind, settings);
   if (!fileProvider) return null;
   const store = createAppLocalStore({ appService, settings, envConfig });
-  return new FileSyncEngine(fileProvider, store);
+  return { engine: new FileSyncEngine(fileProvider, store), provider: fileProvider };
 };
 
 /** One backend's library sync. Throws; the caller isolates the failure. */
@@ -80,8 +82,9 @@ const syncOneBackend = async (
 ): Promise<SyncLibraryResult | null> => {
   const appService = await envConfig.getAppService();
   const current = useSettingsStore.getState().settings;
-  const engine = await buildEngine(envConfig, kind);
-  if (!engine) return null;
+  const built = await buildEngine(envConfig, kind);
+  if (!built) return null;
+  const { engine, provider } = built;
 
   const key = settingsKeyForBackend(kind);
   const ps = current[key];
@@ -110,6 +113,20 @@ const syncOneBackend = async (
         );
     },
   });
+
+  // Portable app preferences ride the same backend as the library. Isolated so
+  // a settings failure never fails the book sync.
+  if (ps?.syncSettings !== false) {
+    try {
+      await syncAppSettings({
+        provider,
+        backendKind: kind,
+        saveSettings: (next) => appService.saveSettings(next),
+      });
+    } catch (e) {
+      console.warn('[settingsSync] app settings sync failed', kind, e);
+    }
+  }
 
   if (!result.failures && !result.indexPushFailed) {
     const latest = useSettingsStore.getState().settings;
@@ -207,8 +224,9 @@ export const runFileBookUpload = async (envConfig: EnvConfigType, book: Book): P
   let anyUploaded = false;
   for (const kind of backends) {
     try {
-      const engine = await buildEngine(envConfig, kind);
-      if (!engine) continue;
+      const built = await buildEngine(envConfig, kind);
+      if (!built) continue;
+      const { engine } = built;
       const result = await engine.pushBookFile(book);
       if (!result.uploaded && result.reason !== 'remote-matches') continue;
       anyUploaded = true;
@@ -239,8 +257,9 @@ export const runFileBookDownload = async (
   const backends = getActiveFileSyncBackends(useSettingsStore.getState().settings);
   for (const kind of backends) {
     try {
-      const engine = await buildEngine(envConfig, kind);
-      if (!engine) continue;
+      const built = await buildEngine(envConfig, kind);
+      if (!built) continue;
+      const { engine } = built;
       if (!(await engine.downloadBookFile(book, onProgress))) continue;
       book.downloadedAt = Date.now();
       if (!book.coverDownloadedAt) book.coverDownloadedAt = Date.now();

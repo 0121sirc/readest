@@ -193,6 +193,12 @@ export interface WebDAVSettings {
   syncProgress?: boolean;
   syncNotes?: boolean;
   syncBooks?: boolean;
+  /**
+   * Mirror portable app settings (reader layout/typography, translation,
+   * highlight colours, AI/TTS endpoint config, dictionary prefs) to this
+   * backend via `Readest/settings.json`. Absent means on.
+   */
+  syncSettings?: boolean;
   // When true, "Sync now" re-checks every book instead of only those whose
   // local copy differs from the shared library.json index (the default
   // incremental walk). An escape hatch for drift or a first full sync.
@@ -231,6 +237,12 @@ export interface GoogleDriveSettings {
   syncProgress?: boolean;
   syncNotes?: boolean;
   syncBooks?: boolean;
+  /**
+   * Mirror portable app settings (reader layout/typography, translation,
+   * highlight colours, AI/TTS endpoint config, dictionary prefs) to this
+   * backend via `Readest/settings.json`. Absent means on.
+   */
+  syncSettings?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -259,6 +271,12 @@ export interface S3Settings {
   syncProgress?: boolean;
   syncNotes?: boolean;
   syncBooks?: boolean;
+  /**
+   * Mirror portable app settings (reader layout/typography, translation,
+   * highlight colours, AI/TTS endpoint config, dictionary prefs) to this
+   * backend via `Readest/settings.json`. Absent means on.
+   */
+  syncSettings?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -281,6 +299,12 @@ export interface OneDriveSettings {
   syncProgress?: boolean;
   syncNotes?: boolean;
   syncBooks?: boolean;
+  /**
+   * Mirror portable app settings (reader layout/typography, translation,
+   * highlight colours, AI/TTS endpoint config, dictionary prefs) to this
+   * backend via `Readest/settings.json`. Absent means on.
+   */
+  syncSettings?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -300,6 +324,12 @@ export interface ICloudSettings {
   syncProgress?: boolean;
   syncNotes?: boolean;
   syncBooks?: boolean;
+  /**
+   * Mirror portable app settings (reader layout/typography, translation,
+   * highlight colours, AI/TTS endpoint config, dictionary prefs) to this
+   * backend via `Readest/settings.json`. Absent means on.
+   */
+  syncSettings?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;

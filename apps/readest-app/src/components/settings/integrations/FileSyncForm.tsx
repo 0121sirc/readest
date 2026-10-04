@@ -25,6 +25,7 @@ import { BoxedList, SettingsRow, SettingsSelect, SettingsSwitchRow } from '../pr
 export interface FileSyncFormSettings {
   enabled?: boolean;
   syncBooks?: boolean;
+  syncSettings?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -95,6 +96,7 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
   const setLastError = useFileSyncStore((s) => s.setLastError);
 
   const handleToggleSyncBooks = () => persist({ syncBooks: !(stored.syncBooks ?? false) });
+  const handleToggleSyncSettings = () => persist({ syncSettings: !(stored.syncSettings ?? true) });
   const handleToggleFullSync = () => persist({ fullSync: !(stored.fullSync ?? false) });
   const handleStrategyChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     await persist({ strategy: e.target.value as KOSyncStrategy });
@@ -192,6 +194,12 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
         description={_('Uploads book files to your other devices')}
         checked={stored.syncBooks ?? false}
         onChange={handleToggleSyncBooks}
+      />
+      <SettingsSwitchRow
+        label={_('Sync App Settings')}
+        description={_('Sync reader layout, translation, AI/TTS and dictionary preferences')}
+        checked={stored.syncSettings ?? true}
+        onChange={handleToggleSyncSettings}
       />
       <SettingsSwitchRow
         label={_('Full Sync')}

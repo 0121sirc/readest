@@ -32,6 +32,11 @@ export const SYNC_BOOKS_DIR = 'books';
 export const SYNC_LIBRARY_FILE = 'library.json';
 export const SYNC_BOOK_CONFIG_FILE = 'config.json';
 export const SYNC_BOOK_COVER_FILE = 'cover.png';
+// Portable app preferences (reader layout/typography, translation, highlight
+// colours, AI/TTS endpoint config, dictionary prefs) live beside the index so a
+// second device picks them up on its first sync. Device-local fields and
+// credentials are never written here — see settingsSync.ts.
+export const SYNC_SETTINGS_FILE = 'settings.json';
 // TTS section packs (<section>-<keysfp>.mp3 + .json sidecars) live in a
 // per-book subdirectory. Additive to the frozen layout above: older clients
 // simply never look inside it.
@@ -78,6 +83,10 @@ export const buildBookConfigPath = (rootPath: string, bookHash: string): string 
 /** Absolute path of the shared library.json index. */
 export const buildLibraryPath = (rootPath: string): string =>
   join(buildBasePath(rootPath), SYNC_LIBRARY_FILE);
+
+/** Absolute path of the shared app-settings snapshot. */
+export const buildSettingsPath = (rootPath: string): string =>
+  join(buildBasePath(rootPath), SYNC_SETTINGS_FILE);
 
 /**
  * Friendly book file name "<sanitized title>.<ext>" used inside the

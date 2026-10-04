@@ -53,8 +53,13 @@ export const useLibraryFileSync = () => {
   // Library changes — import (adds a row), delete (sets deletedAt), book close
   // (bumps updatedAt) — all mutate `library`, so this single effect covers them
   // plus the initial load pull.
+  //
+  // `settings` is included so a preferences-only edit (layout, translation,
+  // AI/TTS, dictionary — see FileSyncEngine's settings step) also reaches the
+  // backend without waiting for the next book change. The pass is idempotent
+  // and snapshot-guarded, so the extra trigger settles after one run.
   useEffect(() => {
     if (!hasBackends || !libraryLoaded) return;
     debouncedSync();
-  }, [library, libraryLoaded, hasBackends, debouncedSync]);
+  }, [library, settings, libraryLoaded, hasBackends, debouncedSync]);
 };
