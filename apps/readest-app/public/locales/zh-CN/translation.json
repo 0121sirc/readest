@@ -2400,5 +2400,13 @@
   "Dialogue Highlighting": "对话高亮",
   "Background": "背景",
   "Follows the theme color": "跟随主题颜色",
-  "Background Style": "背景样式"
+  "Background Style": "背景样式",
+  "Connected. The local library was replaced by the server content.": "__STRING_NOT_TRANSLATED__",
+  "WebDAV server changed": "__STRING_NOT_TRANSLATED__",
+  "This device was syncing with a different server, root directory or account. Choose which side the library should follow.": "__STRING_NOT_TRANSLATED__",
+  "Connect and Replace": "__STRING_NOT_TRANSLATED__",
+  "Connect and Merge": "__STRING_NOT_TRANSLATED__",
+  "Let the server replace the local library": "__STRING_NOT_TRANSLATED__",
+  "Deletes every local book, reading progress and note, then downloads the content of the server. This cannot be undone.": "__STRING_NOT_TRANSLATED__",
+  "Keeps the books on this device and merges them with the server.": "__STRING_NOT_TRANSLATED__"
 }

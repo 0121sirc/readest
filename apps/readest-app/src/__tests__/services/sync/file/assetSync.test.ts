@@ -239,4 +239,22 @@ describe('syncAssets', () => {
 
     expect(provider.writes.length).toBe(writesAfterFirst);
   });
+
+  // Same rule as the settings snapshot: a repointed backend has never seen
+  // this device's assets, so it must re-publish rather than trust the stamp
+  // written for the previous endpoint.
+  test('the snapshot is scoped per endpoint, so a repointed backend re-publishes', async () => {
+    const provider = makeProvider();
+
+    await syncAssets({ provider, backendKind: 'webdav', scope: 'endpoint-a', envConfig });
+    const writesAfterA = provider.writes.length;
+
+    await syncAssets({ provider, backendKind: 'webdav', scope: 'endpoint-a', envConfig });
+    expect(provider.writes).toHaveLength(writesAfterA);
+
+    await syncAssets({ provider, backendKind: 'webdav', scope: 'endpoint-b', envConfig });
+    expect(provider.writes.length).toBeGreaterThan(writesAfterA);
+    expect(localStorage.getItem('readest_file_assets_sync_v1:webdav:endpoint-a')).toBeTruthy();
+    expect(localStorage.getItem('readest_file_assets_sync_v1:webdav:endpoint-b')).toBeTruthy();
+  });
 });

@@ -23,6 +23,50 @@ export const settingsKeyForBackend = (
 ): 'webdav' | 'googleDrive' | 's3' | 'onedrive' | 'icloud' =>
   kind === 'gdrive' ? 'googleDrive' : kind;
 
+/** djb2 over the identity string, base36 — short, stable, credential-free. */
+const hashScope = (parts: (string | undefined)[]): string => {
+  const text = parts
+    .map((part) => (part ?? '').trim())
+    .filter(Boolean)
+    .join('|');
+  if (!text) return '';
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash) ^ text.charCodeAt(i);
+  return (hash >>> 0).toString(36);
+};
+
+/**
+ * A stable identity for the endpoint a file backend points at: the WebDAV
+ * server/root/account, the Drive or OneDrive account, the S3 endpoint and
+ * bucket. Empty when the backend points nowhere, or has no endpoint worth
+ * distinguishing (iCloud is the device's own container).
+ *
+ * The portable-settings and asset sync snapshots live in localStorage keyed by
+ * backend KIND only, so repointing WebDAV at another server would inherit the
+ * previous target's stamps and silently skip publishing to the new one. Callers
+ * fold this scope into their snapshot key instead. It is hashed rather than
+ * embedded raw so a URL carrying credentials never surfaces in a storage key.
+ */
+export const backendEndpointScope = (
+  settings: SystemSettings | null | undefined,
+  kind: FileSyncBackendKind,
+): string => {
+  switch (kind) {
+    case 'webdav': {
+      const s = settings?.webdav;
+      return s?.serverUrl ? hashScope([s.serverUrl, s.rootPath, s.username]) : '';
+    }
+    case 'gdrive':
+      return hashScope([settings?.googleDrive?.accountLabel]);
+    case 's3':
+      return hashScope([settings?.s3?.endpoint, settings?.s3?.bucket]);
+    case 'onedrive':
+      return hashScope([settings?.onedrive?.accountLabel]);
+    case 'icloud':
+      return '';
+  }
+};
+
 /** Human-readable provider name (product names — deliberately untranslated). */
 export const cloudProviderDisplayName = (kind: CloudSyncProviderKind): string =>
   kind === 'gdrive'

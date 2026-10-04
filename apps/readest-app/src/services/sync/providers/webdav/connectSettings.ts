@@ -1,4 +1,5 @@
 import { WebDAVSettings } from '@/types/settings';
+import { normalizeRootPath } from './client';
 
 export interface WebDAVConnectFormValues {
   serverUrl: string;
@@ -47,4 +48,32 @@ export const buildWebDAVConnectSettings = (
     // absent-means-allow default in the transport) stands.
     ...(form.allowInsecureTls !== undefined ? { allowInsecureTls: form.allowInsecureTls } : {}),
   } as WebDAVSettings;
+};
+
+/**
+ * Does this Connect submit point the backend somewhere NEW — a different
+ * server, root directory or account?
+ *
+ * Password-only edits are not a new target: the same remote keeps syncing and
+ * the connect flow must stay a one-click reconnect. A real endpoint change is
+ * different enough that the local library belongs to the old target, which is
+ * why the connect flow asks whether to merge or let the new target replace it.
+ *
+ * `rootPath` is compared normalised on both sides: the connect handler already
+ * normalises what the user typed, but the *saved* value may predate that (or
+ * arrive as `''` / a trailing slash through a settings restore), and none of
+ * those describe a different directory.
+ */
+export const isWebDAVEndpointChanged = (
+  previous: Partial<WebDAVSettings> | undefined,
+  form: Pick<WebDAVConnectFormValues, 'serverUrl' | 'rootPath' | 'username'>,
+): boolean => {
+  // Nothing saved yet: a first-time connect cannot be "changed".
+  if (!previous?.serverUrl) return false;
+
+  return (
+    previous.serverUrl.trim() !== form.serverUrl.trim() ||
+    normalizeRootPath(previous.rootPath ?? '') !== normalizeRootPath(form.rootPath) ||
+    previous.username !== form.username
+  );
 };

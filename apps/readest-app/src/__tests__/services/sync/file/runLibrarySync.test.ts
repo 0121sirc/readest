@@ -19,6 +19,19 @@ const pushBookFile = vi.fn().mockResolvedValue({ uploaded: true });
 const pushBookCover = vi.fn().mockResolvedValue({ uploaded: true });
 const downloadBookFile = vi.fn().mockResolvedValue(true);
 
+// The two "extras" steps are asserted through their own suites (their scope /
+// toggle / remote-wins behaviour); here they are stubbed so a pass never
+// reaches the real network-shaped code with a fixture provider.
+const syncAppSettings = vi.hoisted(() =>
+  vi.fn(async (_opts: Record<string, unknown>) => ({ applied: false, pushed: false })),
+);
+const syncAssets = vi.hoisted(() =>
+  vi.fn(async (_opts: Record<string, unknown>) => ({ applied: 0, pushed: 0, downloaded: 0 })),
+);
+
+vi.mock('@/services/sync/file/settingsSync', () => ({ syncAppSettings }));
+vi.mock('@/services/sync/file/assetSync', () => ({ syncAssets }));
+
 vi.mock('@/services/sync/file/providerRegistry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/sync/file/providerRegistry')>();
   return {
@@ -62,6 +75,7 @@ import { hasValidWebDriveToken } from '@/services/sync/providers/gdrive/auth/web
 import {
   canBackendRun,
   getReadyFileSyncBackends,
+  replaceLocalLibraryWithRemote,
   runFileBookDownload,
   runFileBookUpload,
   runFileLibrarySyncPass,
@@ -220,6 +234,87 @@ describe('runFileLibrarySyncPass', () => {
     useFileSyncStore.getState().beginSync('s3', 'busy');
     expect(await runFileLibrarySyncPass(envConfig, translationFn)).toBeNull();
     expect(syncLibrary).not.toHaveBeenCalled();
+  });
+
+  // The endpoint-replace flow purges the local library and immediately pulls
+  // the NEW target. It must talk to that backend only, and pull-only: pushing
+  // the half-replaced state (or waking a second backend) would repopulate the
+  // very remote the user just asked to adopt.
+  test('`only` restricts the pass to one backend', async () => {
+    const result = await runFileLibrarySyncPass(envConfig, translationFn, { only: 'webdav' });
+
+    expect(syncLibrary).toHaveBeenCalledTimes(1);
+    expect(result?.booksSynced).toBe(1);
+    expect(useSettingsStore.getState().settings.googleDrive?.lastSyncedAt).toBeUndefined();
+  });
+
+  test('`strategyOverride` forces the direction for one run', async () => {
+    await runFileLibrarySyncPass(envConfig, translationFn, {
+      only: 'webdav',
+      strategyOverride: 'receive',
+    });
+
+    const options = syncLibrary.mock.calls[0]![1] as { strategy: string };
+    expect(options.strategy).toBe('receive');
+  });
+});
+
+describe('replaceLocalLibraryWithRemote', () => {
+  const appService = {
+    saveSettings: vi.fn(async () => {}),
+    loadLibraryBooks: vi.fn(async (): Promise<Book[]> => [makeBook('h1'), makeBook('h2')]),
+    deleteBook: vi.fn(async () => {}),
+    saveLibraryBooks: vi.fn(async () => {}),
+  };
+
+  beforeEach(() => {
+    syncLibrary.mockReset().mockResolvedValue(syncResult({ booksSynced: 7 }));
+    useSettingsStore.getState().setSettings(multiProviderSettings);
+    useLibraryStore.setState({ library: [makeBook('h1'), makeBook('h2')], libraryLoaded: true });
+    useFileSyncStore.setState({ byKind: {}, activeKind: null, lastErrorByKind: {} });
+    setCachedUserPlan('pro');
+    appService.loadLibraryBooks.mockClear();
+    appService.deleteBook.mockClear();
+    appService.saveLibraryBooks.mockClear();
+    syncAppSettings.mockClear();
+    (envConfig as unknown as { getAppService: ReturnType<typeof vi.fn> }).getAppService
+      .mockReset()
+      .mockImplementation(async () => appService as never);
+  });
+
+  test('purges every local book, then pulls the new target receive-only', async () => {
+    await replaceLocalLibraryWithRemote(envConfig, translationFn, 'webdav');
+
+    // Local side: every book purged (files, cover, config) and the library
+    // replaced with an empty one, not a tombstoned one — tombstones would be
+    // pushed straight back up to the server the user just adopted.
+    expect(appService.deleteBook).toHaveBeenCalledTimes(2);
+    expect(appService.deleteBook).toHaveBeenCalledWith(expect.anything(), 'purge');
+    expect(appService.saveLibraryBooks).toHaveBeenCalledWith([], { replace: true });
+    expect(useLibraryStore.getState().library).toEqual([]);
+
+    // Remote side: pull-only (`syncBooks` would push nothing anyway, and a
+    // strategy that uploads would fight the "remote wins" choice).
+    expect(syncLibrary).toHaveBeenCalledTimes(1);
+    expect((syncLibrary.mock.calls[0]![1] as { strategy: string }).strategy).toBe('receive');
+
+    // The purge must finish before anything touches the remote.
+    expect(appService.saveLibraryBooks.mock.invocationCallOrder[0]).toBeLessThan(
+      syncLibrary.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  test('talks to the repointed backend only, and lets its settings win', async () => {
+    await replaceLocalLibraryWithRemote(envConfig, translationFn, 'webdav');
+
+    // Two backends are enabled in this fixture; one syncLibrary call means the
+    // pass was narrowed, and only WebDAV records a sync.
+    expect(syncLibrary).toHaveBeenCalledTimes(1);
+    expect(useSettingsStore.getState().settings.googleDrive?.lastSyncedAt).toBeUndefined();
+    expect(syncAppSettings.mock.calls[0]![0]).toMatchObject({
+      backendKind: 'webdav',
+      preferRemote: true,
+    });
   });
 });
 

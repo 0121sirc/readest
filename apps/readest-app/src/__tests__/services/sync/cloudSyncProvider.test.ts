@@ -11,6 +11,7 @@ vi.mock('@/utils/access', async (importOriginal) => {
 
 import {
   applySyncBooksAutoEnable,
+  backendEndpointScope,
   cloudProviderDisplayName,
   cloudProvidersDisplayName,
   getActiveFileSyncBackends,
@@ -314,5 +315,63 @@ describe('resolveCloudSyncGate — cached customization entitlement', () => {
     setCachedCustomizationPurchased(false);
     resolveCloudSyncGate(webdavOn(), 'free');
     expect(isCloudSyncAllowed).toHaveBeenCalledWith('free', false);
+  });
+});
+
+// The settings/assets sync snapshots live in localStorage keyed per backend
+// kind. Repointing a backend at a different server/account must NOT inherit
+// the previous target's stamps, so the key carries this scope.
+describe('backendEndpointScope', () => {
+  test('is empty while the backend points nowhere', () => {
+    expect(backendEndpointScope(s({ webdav: { enabled: true } as never }), 'webdav')).toBe('');
+    expect(backendEndpointScope(undefined, 'webdav')).toBe('');
+  });
+
+  test('stays stable for an unchanged endpoint', () => {
+    const settings = s({
+      webdav: {
+        enabled: true,
+        serverUrl: 'https://dav.example.com',
+        rootPath: '/Readest',
+        username: 'alice',
+      },
+    } as never);
+    expect(backendEndpointScope(settings, 'webdav')).toBe(backendEndpointScope(settings, 'webdav'));
+    expect(backendEndpointScope(settings, 'webdav')).not.toBe('');
+  });
+
+  test('changes when the server, root or account changes', () => {
+    const base = {
+      enabled: true,
+      serverUrl: 'https://dav.example.com',
+      rootPath: '/Readest',
+      username: 'alice',
+    };
+    expect(backendEndpointScope(s({ webdav: base } as never), 'webdav')).not.toBe(
+      backendEndpointScope(
+        s({ webdav: { ...base, serverUrl: 'https://other.example.com' } } as never),
+        'webdav',
+      ),
+    );
+    expect(backendEndpointScope(s({ webdav: base } as never), 'webdav')).not.toBe(
+      backendEndpointScope(s({ webdav: { ...base, rootPath: '/Other' } } as never), 'webdav'),
+    );
+    expect(backendEndpointScope(s({ webdav: base } as never), 'webdav')).not.toBe(
+      backendEndpointScope(s({ webdav: { ...base, username: 'bob' } } as never), 'webdav'),
+    );
+  });
+
+  test('is sensitive to the OAuth account label on Drive', () => {
+    expect(
+      backendEndpointScope(
+        s({ googleDrive: { enabled: true, accountLabel: 'a@x.com' } } as never),
+        'gdrive',
+      ),
+    ).not.toBe(
+      backendEndpointScope(
+        s({ googleDrive: { enabled: true, accountLabel: 'b@x.com' } } as never),
+        'gdrive',
+      ),
+    );
   });
 });

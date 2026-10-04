@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 
 import type { Book } from '@/types/book';
+import type { SystemSettings } from '@/types/settings';
 
 /**
  * Task 8 (issue #5062) — `useLibraryFileSync` was collapsed to a pure trigger:
@@ -44,6 +45,7 @@ vi.mock('@/services/sync/file/runLibrarySync', () => ({
 
 const { useLibraryFileSync } = await import('@/app/library/hooks/useLibraryFileSync');
 const { useLibraryStore } = await import('@/store/libraryStore');
+const { useSettingsStore } = await import('@/store/settingsStore');
 
 const book = (hash: string): Book =>
   ({
@@ -56,6 +58,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   routing.backends = [];
   useLibraryStore.setState({ library: [], libraryLoaded: true });
+  useSettingsStore.setState({ settings: { version: 1 } as SystemSettings });
 });
 
 afterEach(() => {
@@ -174,5 +177,38 @@ describe('useLibraryFileSync trigger (issue #5062 Task 8)', () => {
     // With stable memoized debounce, timer fires at 5000: 1 call.
     // With unstable per-render debounce, timer is rescheduled at time 5000: 0 calls.
     expect(runFileLibrarySyncPass).toHaveBeenCalledTimes(1);
+  });
+
+  it('debounces a settings-only edit into a pass call', async () => {
+    // The hook watches `settings` as well as `library`, so a preferences-only
+    // edit (reader layout, typography, dictionary prefs) reaches the backend
+    // without waiting for the next book change.
+    routing.backends = ['webdav'];
+    useSettingsStore.setState({ settings: { version: 1 } as SystemSettings });
+
+    const { rerender } = renderHook(() => useLibraryFileSync());
+
+    // Let the mount trigger settle first so the assertion below is about the
+    // settings edit alone.
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+    });
+    expect(runFileLibrarySyncPass).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useSettingsStore.setState({
+        settings: {
+          version: 1,
+          globalViewSettings: { defaultFontSize: 20 },
+        } as unknown as SystemSettings,
+      });
+    });
+    rerender();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    expect(runFileLibrarySyncPass).toHaveBeenCalledTimes(2);
   });
 });

@@ -55,7 +55,6 @@ import { useTheme } from '@/hooks/useTheme';
 import { useUICSS } from '@/hooks/useUICSS';
 import { useDemoBooks } from './hooks/useDemoBooks';
 import { useBooksSync } from './hooks/useBooksSync';
-import { useLibraryFileSync } from './hooks/useLibraryFileSync';
 import { useBookTransferActions } from './hooks/useBookTransferActions';
 import { useAbsOfflineDownload } from './hooks/useAbsOfflineDownload';
 import { useAutoImportFolders } from './hooks/useAutoImportFolders';
@@ -383,10 +382,6 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
   useTransferQueue(libraryLoaded);
 
   const { pullLibrary, pushLibrary } = useBooksSync();
-  // Library-scoped auto-sync for the active third-party cloud provider (WebDAV /
-  // Google Drive): keeps library.json current on import / delete / book-close,
-  // parity with useBooksSync. No-op when no provider is enabled.
-  useLibraryFileSync();
   const { checkOPDSSubscriptions } = useOPDSSubscriptions();
   useABSSync();
   useInboxDrainer();

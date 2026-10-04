@@ -5,7 +5,7 @@ import type { Book } from '@/types/book';
 import type { EnvConfigType } from '@/services/environment';
 import type { ProgressHandler } from '@/utils/transfer';
 import type { TranslationFunc } from '@/hooks/useTranslation';
-import type { SystemSettings } from '@/types/settings';
+import type { KOSyncStrategy, SystemSettings } from '@/types/settings';
 import type { UserPlan } from '@/types/quota';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
@@ -14,6 +14,7 @@ import { isWebAppPlatform } from '@/services/environment';
 import { hasValidWebDriveToken } from '@/services/sync/providers/gdrive/auth/webTokenStore';
 import { isICloudSupportedPlatform } from '@/services/sync/providers/icloud/buildICloudProvider';
 import {
+  backendEndpointScope,
   getActiveFileSyncBackends,
   settingsKeyForBackend,
 } from '@/services/sync/cloudSyncProvider';
@@ -26,6 +27,7 @@ import { FileSyncEngine, type SyncLibraryResult } from '@/services/sync/file/eng
 import type { FileSyncProvider } from '@/services/sync/file/provider';
 import { syncAppSettings } from '@/services/sync/file/settingsSync';
 import { syncAssets } from '@/services/sync/file/assetSync';
+import { purgeLocalLibrary } from '@/services/deleteLibraryService';
 import { withWebLock } from '@/utils/webLock';
 
 /**
@@ -75,11 +77,75 @@ const buildEngine = async (
   return { engine: new FileSyncEngine(fileProvider, store), provider: fileProvider };
 };
 
+/** Name of the cross-tab mutex that serialises library sync passes. */
+const FILE_SYNC_LOCK = 'readest:file-sync';
+
+/** Knobs for one library sync PASS; see {@link runFileLibrarySyncPass}. */
+export interface FileLibraryPassOptions {
+  /** Skip the pass when another context already holds the mutex (auto-sync). */
+  ifAvailable?: boolean;
+  /** Narrow the pass to this one backend instead of every enabled one. */
+  only?: FileSyncBackendKind;
+  /** Force the conflict policy for this run, whatever the backend is set to. */
+  strategyOverride?: KOSyncStrategy;
+  /** Let the remote win every settings section instead of this device. */
+  preferRemote?: boolean;
+  /** The caller already holds the cross-tab mutex — do not re-request it. */
+  lockHeld?: boolean;
+}
+
+/**
+ * The non-book steps of a backend sync: portable app settings and imported
+ * fonts/textures/dictionaries. Shared by the library pass and the manual
+ * "Sync now" button (which used to reconcile books and leave these behind).
+ *
+ * `scope` keys both steps' snapshots to the endpoint the backend points at, so
+ * repointing it at another server cannot inherit the old target's stamps;
+ * `preferRemote` makes the settings step adopt the remote copy outright, for
+ * the caller that has already decided the remote side owns this device.
+ */
+export const syncBackendExtras = async (
+  envConfig: EnvConfigType,
+  kind: FileSyncBackendKind,
+  provider: FileSyncProvider,
+  opts: { preferRemote?: boolean } = {},
+): Promise<void> => {
+  const settings = useSettingsStore.getState().settings;
+  const ps = settings?.[settingsKeyForBackend(kind)];
+  const scope = backendEndpointScope(settings, kind);
+
+  // Isolated per step: a settings failure must not skip the asset sync, or
+  // fail the book sync that just succeeded.
+  if (ps?.syncSettings !== false) {
+    try {
+      const appService = await envConfig.getAppService();
+      await syncAppSettings({
+        provider,
+        backendKind: kind,
+        scope,
+        preferRemote: opts.preferRemote,
+        saveSettings: (next) => appService.saveSettings(next),
+      });
+    } catch (e) {
+      console.warn('[settingsSync] app settings sync failed', kind, e);
+    }
+  }
+
+  if (ps?.syncAssets !== false) {
+    try {
+      await syncAssets({ provider, backendKind: kind, envConfig, scope });
+    } catch (e) {
+      console.warn('[assetSync] imported asset sync failed', kind, e);
+    }
+  }
+};
+
 /** One backend's library sync. Throws; the caller isolates the failure. */
 const syncOneBackend = async (
   envConfig: EnvConfigType,
   kind: FileSyncBackendKind,
   _: TranslationFunc,
+  opts: FileLibraryPassOptions = {},
 ): Promise<SyncLibraryResult | null> => {
   const appService = await envConfig.getAppService();
   const current = useSettingsStore.getState().settings;
@@ -97,7 +163,7 @@ const syncOneBackend = async (
     await appService.saveSettings(next);
   }
 
-  const strategy = ps?.strategy ?? 'silent';
+  const strategy = opts.strategyOverride ?? ps?.strategy ?? 'silent';
   const result = await engine.syncLibrary(useLibraryStore.getState().library, {
     strategy: strategy === 'prompt' ? 'silent' : strategy,
     syncBooks: ps?.syncBooks ?? false,
@@ -115,28 +181,7 @@ const syncOneBackend = async (
     },
   });
 
-  // Portable app preferences ride the same backend as the library. Isolated so
-  // a settings failure never fails the book sync.
-  if (ps?.syncSettings !== false) {
-    try {
-      await syncAppSettings({
-        provider,
-        backendKind: kind,
-        saveSettings: (next) => appService.saveSettings(next),
-      });
-    } catch (e) {
-      console.warn('[settingsSync] app settings sync failed', kind, e);
-    }
-  }
-
-  // Imported fonts / textures / dictionaries (bytes + metadata), same backend.
-  if (ps?.syncAssets !== false) {
-    try {
-      await syncAssets({ provider, backendKind: kind, envConfig });
-    } catch (e) {
-      console.warn('[assetSync] imported asset sync failed', kind, e);
-    }
-  }
+  await syncBackendExtras(envConfig, kind, provider, opts);
 
   if (!result.failures && !result.indexPushFailed) {
     const latest = useSettingsStore.getState().settings;
@@ -169,12 +214,13 @@ const syncOneBackend = async (
 export const runFileLibrarySyncPass = async (
   envConfig: EnvConfigType,
   _: TranslationFunc,
-  opts: { ifAvailable?: boolean } = {},
+  opts: FileLibraryPassOptions = {},
 ): Promise<SyncLibraryResult | null> => {
   const run = async (): Promise<SyncLibraryResult | null> => {
     // Paused means paused (#4959): a downgraded account's still-enabled backends
     // must not sync, and must not fall back to Readest Cloud either.
-    const backends = getActiveFileSyncBackends(useSettingsStore.getState().settings);
+    const active = getActiveFileSyncBackends(useSettingsStore.getState().settings);
+    const backends = opts.only ? active.filter((kind) => kind === opts.only) : active;
     if (backends.length === 0) return null;
 
     // NEVER sync a library that is not loaded from disk: pushing an empty index
@@ -189,7 +235,7 @@ export const runFileLibrarySyncPass = async (
         const kind = backends[i]!;
         if (i > 0) useFileSyncStore.getState().switchSync(kind, _('Syncing…'));
         try {
-          const result = await syncOneBackend(envConfig, kind, _);
+          const result = await syncOneBackend(envConfig, kind, _, opts);
           if (result) {
             useFileSyncStore.getState().setLastError(kind, formatSyncFailure(result, _));
             // Spread the latest counters, but ACCUMULATE everything that reports
@@ -217,8 +263,44 @@ export const runFileLibrarySyncPass = async (
     }
     return merged;
   };
-  const result = await withWebLock('readest:file-sync', run, { ifAvailable: opts.ifAvailable });
+  const result = opts.lockHeld
+    ? await run()
+    : await withWebLock(FILE_SYNC_LOCK, run, { ifAvailable: opts.ifAvailable });
   return result ?? null;
+};
+
+/**
+ * "The remote wins" — the destructive half of reconnecting a backend to a
+ * different endpoint (another WebDAV server, root or account).
+ *
+ * Purges this device's library (book rows, files, covers — not tombstones, which
+ * the following push would re-upload to the new target), then runs a single,
+ * receive-only pass against `kind`: the new endpoint's index becomes the local
+ * library, and its portable settings override the device's own. Every other
+ * enabled backend is left untouched, so adopting one target cannot drag the
+ * others along.
+ *
+ * The whole thing runs inside the cross-tab mutex (and the pass below is told
+ * it is already held): an auto-sync in flight — here or in another tab — would
+ * otherwise be free to upload the library we are about to delete to the
+ * endpoint we just adopted.
+ */
+export const replaceLocalLibraryWithRemote = async (
+  envConfig: EnvConfigType,
+  _: TranslationFunc,
+  kind: FileSyncBackendKind,
+): Promise<void> => {
+  await withWebLock(FILE_SYNC_LOCK, async () => {
+    const appService = await envConfig.getAppService();
+    await purgeLocalLibrary(appService);
+    useLibraryStore.getState().setLibrary([]);
+    return runFileLibrarySyncPass(envConfig, _, {
+      only: kind,
+      strategyOverride: 'receive',
+      preferRemote: true,
+      lockHeld: true,
+    });
+  });
 };
 
 /**

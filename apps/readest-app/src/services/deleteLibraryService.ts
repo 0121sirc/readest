@@ -2,21 +2,17 @@ import { AppService } from '@/types/system';
 import { deleteCloudLibrary } from '@/libs/user';
 
 /**
- * Wipe the user's whole library: the cloud `books` rows first, then every book
- * on this device.
+ * Remove every book from THIS device: rows, files, covers and reading data.
  *
- * The cloud call goes first on purpose. It is the recoverable half — if it
- * fails, nothing local has been touched yet and the user still has every book.
- * The local purge is irreversible, so it only runs once the network step has
- * succeeded.
+ * A hard removal rather than `deletedAt` tombstones — tombstones would be
+ * pushed straight back up on the next sync and refill the library we just
+ * emptied, which is exactly what the file-sync endpoint-replace flow must not
+ * do to the server it just adopted.
  *
- * Both halves are hard removals rather than `deletedAt` tombstones. Tombstones
- * would be pushed back up on the next sync, refilling the very rows we just
- * deleted and clearing the library on every other signed-in device.
+ * Callers that only clear this device use it on its own; {@link deleteAllBooks}
+ * wraps it with the Readest Cloud half.
  */
-export const deleteAllBooks = async (appService: AppService): Promise<void> => {
-  await deleteCloudLibrary();
-
+export const purgeLocalLibrary = async (appService: AppService): Promise<void> => {
   const books = await appService.loadLibraryBooks();
   for (const book of books) {
     try {
@@ -33,4 +29,18 @@ export const deleteAllBooks = async (appService: AppService): Promise<void> => {
   }
 
   await appService.saveLibraryBooks([], { replace: true });
+};
+
+/**
+ * Wipe the user's whole library: the cloud `books` rows first, then every book
+ * on this device.
+ *
+ * The cloud call goes first on purpose. It is the recoverable half — if it
+ * fails, nothing local has been touched yet and the user still has every book.
+ * The local purge is irreversible, so it only runs once the network step has
+ * succeeded.
+ */
+export const deleteAllBooks = async (appService: AppService): Promise<void> => {
+  await deleteCloudLibrary();
+  await purgeLocalLibrary(appService);
 };

@@ -81,19 +81,22 @@ export interface AssetsManifest {
   dictionaries: PortableDictionary[];
 }
 
-const snapshotKey = (backendKind: string) => `readest_file_assets_sync_v1:${backendKind}`;
+// Scoped per endpoint like the settings snapshot — a repointed backend has
+// never seen this device's assets, so its stamp must not mask re-publishing.
+const snapshotKey = (backendKind: string, scope = '') =>
+  `readest_file_assets_sync_v1:${backendKind}${scope ? `:${scope}` : ''}`;
 
-const readSnapshot = (backendKind: string): string | null => {
+const readSnapshot = (backendKind: string, scope = ''): string | null => {
   try {
-    return localStorage.getItem(snapshotKey(backendKind));
+    return localStorage.getItem(snapshotKey(backendKind, scope));
   } catch {
     return null;
   }
 };
 
-const writeSnapshot = (backendKind: string, hash: string): void => {
+const writeSnapshot = (backendKind: string, hash: string, scope = ''): void => {
   try {
-    localStorage.setItem(snapshotKey(backendKind), hash);
+    localStorage.setItem(snapshotKey(backendKind, scope), hash);
   } catch {
     // Storage unavailable; the next run re-pushes (idempotent).
   }
@@ -331,6 +334,8 @@ export interface SyncAssetsOptions {
   provider: FileSyncProvider;
   backendKind: string;
   envConfig: EnvConfigType;
+  /** Opaque endpoint identity — see {@link backendEndpointScope}. */
+  scope?: string;
 }
 
 export interface SyncAssetsResult {
@@ -345,7 +350,7 @@ export interface SyncAssetsResult {
  * pass — unchanged state does no writes.
  */
 export const syncAssets = async (options: SyncAssetsOptions): Promise<SyncAssetsResult> => {
-  const { provider, backendKind, envConfig } = options;
+  const { provider, backendKind, envConfig, scope } = options;
   const appService = await envConfig.getAppService();
   const root = provider.rootPath;
 
@@ -365,7 +370,7 @@ export const syncAssets = async (options: SyncAssetsOptions): Promise<SyncAssets
   const hash = hashManifest(manifest);
   let pushed = 0;
 
-  if (!remote || hash !== readSnapshot(backendKind)) {
+  if (!remote || hash !== readSnapshot(backendKind, scope)) {
     // Binaries first, manifest last, so a peer never sees an incomplete bundle.
     for (const font of manifest.fonts) {
       const dir = buildAssetDirPath(root, 'font', font.contentId);
@@ -439,7 +444,7 @@ export const syncAssets = async (options: SyncAssetsOptions): Promise<SyncAssets
       console.warn('[assetSync] failed to write remote manifest', e);
       return { applied: 0, pushed: 0, downloaded: 0 };
     }
-    writeSnapshot(backendKind, hash);
+    writeSnapshot(backendKind, hash, scope);
   }
 
   // Fetch any bytes a placeholder is still missing, then activate.

@@ -1,5 +1,8 @@
 import { describe, test, expect } from 'vitest';
-import { buildWebDAVConnectSettings } from '@/services/sync/providers/webdav/connectSettings';
+import {
+  buildWebDAVConnectSettings,
+  isWebDAVEndpointChanged,
+} from '@/services/sync/providers/webdav/connectSettings';
 import type { WebDAVSettings } from '@/types/settings';
 
 describe('buildWebDAVConnectSettings', () => {
@@ -119,5 +122,68 @@ describe('buildWebDAVConnectSettings', () => {
     // by whichever server it's currently talking to.
     expect(next.deviceId).toBe('device-keep');
     expect(next.syncBooks).toBe(false);
+  });
+});
+
+describe('isWebDAVEndpointChanged', () => {
+  const form = (over: Partial<{ serverUrl: string; rootPath: string; username: string }> = {}) => ({
+    serverUrl: 'https://dav.example.com',
+    rootPath: '/Readest',
+    username: 'alice',
+    ...over,
+  });
+
+  const previous = (over: Partial<WebDAVSettings> = {}): WebDAVSettings =>
+    ({
+      enabled: true,
+      serverUrl: 'https://dav.example.com',
+      username: 'alice',
+      password: 'hunter2',
+      rootPath: '/Readest',
+      ...over,
+    }) as WebDAVSettings;
+
+  test('is false on a first-time connection (no saved endpoint)', () => {
+    expect(isWebDAVEndpointChanged(undefined, form())).toBe(false);
+    expect(isWebDAVEndpointChanged({ enabled: false } as WebDAVSettings, form())).toBe(false);
+  });
+
+  test('is false when only the password changed', () => {
+    expect(isWebDAVEndpointChanged(previous({ password: 'old' }), form())).toBe(false);
+  });
+
+  test('is false when the saved root is written unnormalised (legacy config)', () => {
+    // The form prefills `stored.rootPath || '/'` and submits normalised output,
+    // so a stored `''` or `'/Readest/'` describes the very same directory —
+    // reading it as a new endpoint would offer a destructive replace on an
+    // ordinary reconnect.
+    expect(isWebDAVEndpointChanged(previous({ rootPath: '' }), form({ rootPath: '/' }))).toBe(
+      false,
+    );
+    expect(isWebDAVEndpointChanged(previous({ rootPath: '/Readest/' }), form())).toBe(false);
+  });
+
+  test('is false when the same endpoint is submitted again (whitespace trimmed)', () => {
+    expect(
+      isWebDAVEndpointChanged(previous(), {
+        serverUrl: '  https://dav.example.com ',
+        rootPath: '/Readest',
+        username: 'alice',
+      }),
+    ).toBe(false);
+  });
+
+  test('is true when the server URL changes', () => {
+    expect(
+      isWebDAVEndpointChanged(previous(), form({ serverUrl: 'https://other.example.com' })),
+    ).toBe(true);
+  });
+
+  test('is true when the root directory changes', () => {
+    expect(isWebDAVEndpointChanged(previous(), form({ rootPath: '/Other' }))).toBe(true);
+  });
+
+  test('is true when the account changes on the same server', () => {
+    expect(isWebDAVEndpointChanged(previous(), form({ username: 'bob' }))).toBe(true);
   });
 });

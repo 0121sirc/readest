@@ -16,7 +16,12 @@ import { runFileLibrarySyncPass } from '@/services/sync/file/runLibrarySync';
  * reading, but never touches the shared `library.json` index. This hook fills
  * that gap: it runs a sync pass whenever the library changes — importing,
  * deleting, or closing a book all mutate the library array — so `library.json`
- * (book metadata + tombstones) stays current on every mirror.
+ * (book metadata + tombstones) stays current on every mirror. It also watches
+ * `settings`, so a preferences-only edit publishes without one.
+ *
+ * Mounted once at the app root (see `FileSyncAutoTrigger` in `Providers`), not
+ * on the library page: the reader must trigger it too, and no page should have
+ * to remember to.
  *
  * All the execution (engine construction, transport readiness, device ids,
  * strategy, progress, per-backend failure isolation, the held mutex) lives in

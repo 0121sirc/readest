@@ -11,6 +11,7 @@ import { useFileSyncStore } from '@/store/fileSyncStore';
 import { eventDispatcher } from '@/utils/event';
 import { formatSyncFailure } from '@/services/sync/file/syncResult';
 import { FileSyncEngine } from '@/services/sync/file/engine';
+import { syncBackendExtras } from '@/services/sync/file/runLibrarySync';
 import { FileSyncError } from '@/services/sync/file/provider';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import {
@@ -173,6 +174,11 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
 
         const failure = formatSyncFailure(result, _);
         setLastError(kind, failure);
+
+        // Same non-book steps the library pass runs: portable settings and
+        // imported assets. Without them "Sync now" only reconciled books.
+        await syncBackendExtras(envConfig, kind, provider);
+
         if (!failure) {
           await persist({ lastSyncedAt: Date.now() });
           eventDispatcher.dispatch('toast', {

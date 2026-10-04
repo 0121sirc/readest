@@ -33,6 +33,7 @@ import type { AppService } from '@/types/system';
 import type { SystemSettings } from '@/types/settings';
 import { DropdownProvider } from '@/context/DropdownContext';
 import { CommandPaletteProvider, CommandPalette } from '@/components/command-palette';
+import { useLibraryFileSync } from '@/app/library/hooks/useLibraryFileSync';
 import AtmosphereOverlay from '@/components/AtmosphereOverlay';
 import AppLockScreen from '@/components/AppLockScreen';
 import CarMediaLibraryBridge from '@/components/CarMediaLibraryBridge';
@@ -102,6 +103,19 @@ const finalizeTelemetryDecision = ({
     settings.telemetryEnabled = false;
     void appService.saveSettings(settings);
   }
+};
+
+/**
+ * Global mount for the third-party file-sync auto trigger (WebDAV / Drive /
+ * S3 / OneDrive). It reacts to library changes AND to settings edits, so it
+ * belongs at the app root rather than on the library page: a reader changing
+ * the font size or the layout must publish too, even when no library page is
+ * mounted. Rendered inside the app shell so the app lock keeps gating it, and
+ * inside AuthProvider because the trigger reads the signed-in plan.
+ */
+const FileSyncAutoTrigger = () => {
+  useLibraryFileSync();
+  return null;
 };
 
 const Providers = ({ children }: { children: React.ReactNode }) => {
@@ -243,6 +257,7 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
                   style={appShellHidden ? { display: 'none' } : undefined}
                 >
                   {children}
+                  <FileSyncAutoTrigger />
                   <CommandPalette />
                   <AtmosphereOverlay />
                   <PassphrasePrompt />

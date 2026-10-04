@@ -54,20 +54,26 @@ interface SectionStamp {
 }
 type Snapshot = Partial<Record<SectionName, SectionStamp>>;
 
-const snapshotKey = (backendKind: string) => `readest_file_settings_sync_v1:${backendKind}`;
+// The scope suffix separates snapshots taken against different endpoints of the
+// SAME backend kind (WebDAV repointed at another server, Drive signed into
+// another account). Without it the old endpoint's stamps would mask the new
+// one's untouched state and silently skip publishing to it. `backendEndpointScope`
+// hashes the identity, so the key stays short and credential-free.
+const snapshotKey = (backendKind: string, scope = '') =>
+  `readest_file_settings_sync_v1:${backendKind}${scope ? `:${scope}` : ''}`;
 
-const readSnapshot = (backendKind: string): Snapshot => {
+const readSnapshot = (backendKind: string, scope = ''): Snapshot => {
   try {
-    const raw = localStorage.getItem(snapshotKey(backendKind));
+    const raw = localStorage.getItem(snapshotKey(backendKind, scope));
     return raw ? (JSON.parse(raw) as Snapshot) : {};
   } catch {
     return {};
   }
 };
 
-const writeSnapshot = (backendKind: string, snapshot: Snapshot): void => {
+const writeSnapshot = (backendKind: string, snapshot: Snapshot, scope = ''): void => {
   try {
-    localStorage.setItem(snapshotKey(backendKind), JSON.stringify(snapshot));
+    localStorage.setItem(snapshotKey(backendKind, scope), JSON.stringify(snapshot));
   } catch {
     // Storage unavailable; the next run re-publishes (idempotent).
   }
@@ -202,6 +208,14 @@ export interface SyncAppSettingsOptions {
   backendKind: string;
   /** Persist the merged settings (appService.saveSettings). */
   saveSettings: (next: SystemSettings) => Promise<void>;
+  /** Opaque endpoint identity — see {@link backendEndpointScope}. */
+  scope?: string;
+  /**
+   * Adopt the remote value even when this device has no stamp for it (its local
+   * edit would otherwise win by default). Used by the endpoint-replace flow,
+   * where the user asked for the newly connected server to take over.
+   */
+  preferRemote?: boolean;
 }
 
 export interface SyncAppSettingsResult {
@@ -216,7 +230,7 @@ export interface SyncAppSettingsResult {
 export const syncAppSettings = async (
   options: SyncAppSettingsOptions,
 ): Promise<SyncAppSettingsResult> => {
-  const { provider, backendKind } = options;
+  const { provider, backendKind, scope, preferRemote = false } = options;
   const settings = useSettingsStore.getState().settings;
   if (!settings) return { applied: false, pushed: false };
 
@@ -230,7 +244,7 @@ export const syncAppSettings = async (
     console.warn('[settingsSync] failed to read remote settings', e);
   }
 
-  const snapshot = readSnapshot(backendKind);
+  const snapshot = readSnapshot(backendKind, scope);
   const now = Date.now();
   const remoteSections = remote?.sections ?? {};
   const nextSections: Partial<Record<SectionName, RemoteSection>> = { ...remoteSections };
@@ -248,7 +262,9 @@ export const syncAppSettings = async (
     if (remoteSection && (!stamp || remoteSection.t > stamp.t)) {
       // A local edit is assumed newer than a remote write unless the remote
       // timestamp is in the future (our run happens right after the edit).
-      const localWins = localChanged && remoteSection.t <= now;
+      // `preferRemote` drops that assumption — the caller already decided the
+      // remote side owns this device's copy.
+      const localWins = !preferRemote && localChanged && remoteSection.t <= now;
       if (!localWins) {
         mergeSection(nextSettings, section, remoteSection.v);
         snapshot[section] = { hash: hashValue(remoteSection.v), t: remoteSection.t };
@@ -283,7 +299,7 @@ export const syncAppSettings = async (
     }
   }
 
-  if (applied || pushed) writeSnapshot(backendKind, snapshot);
+  if (applied || pushed) writeSnapshot(backendKind, snapshot, scope);
 
   return { applied, pushed };
 };

@@ -82,7 +82,13 @@ vi.mock('@/hooks/useResponsiveSize', () => ({
 vi.mock('@/helpers/settings', () => ({
   saveViewSettings: (...args: unknown[]) => mockSaveViewSettings(...args),
 }));
+// Whitelist: the real module pulls in `@/utils/config`, which is mocked below.
+// `READEST_*` joined the list because `deleteLibraryService` (transitively
+// pulled in by the reader hooks) now imports `@/services/environment`, which
+// reads these at import time.
 vi.mock('@/services/constants', () => ({
+  READEST_WEB_BASE_URL: '',
+  READEST_NODE_BASE_URL: '',
   MAX_ZOOM_LEVEL: 200,
   MIN_ZOOM_LEVEL: 50,
   ZOOM_STEP: 10,
