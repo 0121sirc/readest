@@ -26,6 +26,7 @@ export interface FileSyncFormSettings {
   enabled?: boolean;
   syncBooks?: boolean;
   syncSettings?: boolean;
+  syncAssets?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -97,6 +98,7 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
 
   const handleToggleSyncBooks = () => persist({ syncBooks: !(stored.syncBooks ?? false) });
   const handleToggleSyncSettings = () => persist({ syncSettings: !(stored.syncSettings ?? true) });
+  const handleToggleSyncAssets = () => persist({ syncAssets: !(stored.syncAssets ?? true) });
   const handleToggleFullSync = () => persist({ fullSync: !(stored.fullSync ?? false) });
   const handleStrategyChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     await persist({ strategy: e.target.value as KOSyncStrategy });
@@ -200,6 +202,12 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
         description={_('Sync reader layout, translation, AI/TTS and dictionary preferences')}
         checked={stored.syncSettings ?? true}
         onChange={handleToggleSyncSettings}
+      />
+      <SettingsSwitchRow
+        label={_('Sync Imported Assets')}
+        description={_('Sync imported fonts, textures and dictionaries')}
+        checked={stored.syncAssets ?? true}
+        onChange={handleToggleSyncAssets}
       />
       <SettingsSwitchRow
         label={_('Full Sync')}

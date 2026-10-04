@@ -31,6 +31,7 @@ const SECTION_NAMES = [
   'globalReadSettings',
   'aiSettings',
   'dictionarySettings',
+  'libraryBackground',
   'tts',
 ] as const;
 type SectionName = (typeof SECTION_NAMES)[number];
@@ -108,12 +109,10 @@ const hashValue = (value: unknown): string => {
 const pickSection = (section: SectionName, settings: SystemSettings): Record<string, unknown> => {
   switch (section) {
     case 'globalViewSettings':
-      return omit(
-        (settings.globalViewSettings ?? {}) as unknown as Record<string, unknown>,
-        // Texture selection references a bundled image that has no cross-device
-        // transport; sync of it, like sync of imported textures, is out of scope.
-        ['backgroundTextureId'],
-      );
+      // Includes `backgroundTextureId` (the reader's selected texture): the id
+      // is deterministic from the texture name and resolves once the asset sync
+      // has delivered the image.
+      return (settings.globalViewSettings ?? {}) as unknown as Record<string, unknown>;
     case 'globalReadSettings':
       return omit(
         (settings.globalReadSettings ?? {}) as unknown as Record<string, unknown>,
@@ -127,6 +126,14 @@ const pickSection = (section: SectionName, settings: SystemSettings): Record<str
       ]);
     case 'dictionarySettings':
       return (settings.dictionarySettings ?? {}) as unknown as Record<string, unknown>;
+    case 'libraryBackground':
+      // Library-page background selection (top-level, sibling of the reader's
+      // `globalViewSettings.backgroundTextureId`).
+      return {
+        libraryBackgroundTextureId: settings.libraryBackgroundTextureId,
+        libraryBackgroundOpacity: settings.libraryBackgroundOpacity,
+        libraryBackgroundSize: settings.libraryBackgroundSize,
+      };
     case 'tts':
       return omit(
         getOpenAITTSConfig() as unknown as Record<string, unknown>,
@@ -164,6 +171,24 @@ const mergeSection = (
         ...value,
       } as typeof next.dictionarySettings;
       break;
+    case 'libraryBackground': {
+      const patch = value as Partial<
+        Pick<
+          SystemSettings,
+          'libraryBackgroundTextureId' | 'libraryBackgroundOpacity' | 'libraryBackgroundSize'
+        >
+      >;
+      if (patch.libraryBackgroundTextureId !== undefined) {
+        next.libraryBackgroundTextureId = patch.libraryBackgroundTextureId;
+      }
+      if (patch.libraryBackgroundOpacity !== undefined) {
+        next.libraryBackgroundOpacity = patch.libraryBackgroundOpacity;
+      }
+      if (patch.libraryBackgroundSize !== undefined) {
+        next.libraryBackgroundSize = patch.libraryBackgroundSize;
+      }
+      break;
+    }
     case 'tts':
       // TTS config lives in localStorage, not SystemSettings; keep the local
       // API key and take the rest. Applies to sessions started after this.

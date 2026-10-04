@@ -16,6 +16,11 @@ import {
   isEmptyStatsSnapshot,
   type StatsSnapshot,
 } from '@/services/statistics/statsSnapshot';
+import {
+  getOpenAITTSConfig,
+  setOpenAITTSConfig,
+  type OpenAITTSConfig,
+} from '@/services/tts/providers/openaiConfig';
 
 /** Book file extensions for identifying book files in backup directories. */
 const BOOK_EXTS = new Set(Object.values(EXTS));
@@ -27,6 +32,20 @@ const isAbsOfflineEntry = (entryName: string): boolean => {
 
 /** Root-level zip entry name for the backed-up global settings snapshot. */
 export const SETTINGS_BACKUP_FILENAME = 'settings.json';
+
+/**
+ * Root-level zip entry name for the custom OpenAI-compatible TTS config. It
+ * lives in localStorage (not `SystemSettings`), so it needs its own entry to
+ * round-trip like the WebDAV settings sync's `tts` section does. The API key is
+ * stripped unless the user includes credentials.
+ */
+export const TTS_BACKUP_FILENAME = 'readest-tts.json';
+
+/** Strip the TTS endpoint key unless credentials are being included. */
+export const sanitizeTtsConfigForBackup = (
+  config: OpenAITTSConfig,
+  includeCredentials: boolean,
+): OpenAITTSConfig => (includeCredentials ? config : { ...config, apiKey: '' });
 
 /** Root-level zip entry name for the sync-snapshot manifest. */
 export const SNAPSHOT_MANIFEST_FILENAME = 'manifest.json';
@@ -534,6 +553,18 @@ async function collectBackupEntries(
     console.warn('Skipping settings backup:', error);
   }
 
+  // Custom OpenAI-compatible TTS config (localStorage). Only emit when
+  // configured; the endpoint key is a credential, so strip it unless opted in.
+  try {
+    const tts = getOpenAITTSConfig();
+    if (tts.baseUrl.trim()) {
+      const portable = sanitizeTtsConfigForBackup(tts, opts.includeCredentials);
+      texts.push({ name: TTS_BACKUP_FILENAME, content: JSON.stringify(portable, null, 2) });
+    }
+  } catch (error) {
+    console.warn('Skipping TTS config backup:', error);
+  }
+
   // Add the files of every live library book. Only a book's own `<hash>/`
   // dir is exported: the Books/ tree also holds root-level library metadata
   // and dirs no live row references — a soft-deleted book whose file
@@ -814,6 +845,7 @@ export async function restoreFromBackupZip(
     name === SNAPSHOT_MANIFEST_FILENAME ||
     name === STATS_SNAPSHOT_FILENAME ||
     name === SETTINGS_BACKUP_FILENAME ||
+    name === TTS_BACKUP_FILENAME ||
     name === getLibraryFilename();
 
   // Read backup library.json
@@ -991,6 +1023,24 @@ export async function restoreFromBackupZip(
       settingsRestored = true;
     } catch (error) {
       console.warn('Failed to restore settings from backup:', error);
+    }
+  }
+
+  // Restore the custom TTS config (localStorage). The backup omits the API key
+  // unless credentials were included, so keep the local key in that case.
+  const ttsEntry = fileEntries.find((e) => e.filename === TTS_BACKUP_FILENAME);
+  if (ttsEntry) {
+    try {
+      const data = await ttsEntry.getData!(new Uint8ArrayWriter());
+      const backupTts = JSON.parse(new TextDecoder().decode(data)) as Partial<OpenAITTSConfig>;
+      const current = getOpenAITTSConfig();
+      setOpenAITTSConfig({
+        ...current,
+        ...backupTts,
+        apiKey: backupTts.apiKey || current.apiKey,
+      });
+    } catch (error) {
+      console.warn('Failed to restore TTS config from backup:', error);
     }
   }
 

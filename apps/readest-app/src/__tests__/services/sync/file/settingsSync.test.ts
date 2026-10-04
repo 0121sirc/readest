@@ -119,6 +119,7 @@ describe('syncAppSettings', () => {
         'dictionarySettings',
         'globalReadSettings',
         'globalViewSettings',
+        'libraryBackground',
         'tts',
       ].sort(),
     );
@@ -132,9 +133,10 @@ describe('syncAppSettings', () => {
     expect(payload.sections['aiSettings']!.v).not.toHaveProperty('openrouterApiKey');
     expect(payload.sections['aiSettings']!.v).not.toHaveProperty('aiGatewayApiKey');
     expect(payload.sections['tts']!.v).not.toHaveProperty('apiKey');
-    // Device-local and texture-selection fields are excluded too.
-    expect(payload.sections['globalViewSettings']!.v).not.toHaveProperty('backgroundTextureId');
+    // Device-local fields are excluded; the selected textures now sync.
+    expect(payload.sections['globalViewSettings']!.v).toHaveProperty('backgroundTextureId');
     expect(payload.sections['globalReadSettings']!.v).not.toHaveProperty('notebookActiveTab');
+    expect(payload.sections['libraryBackground']).toBeDefined();
   });
 
   test('applies a newer remote section and keeps local secrets', async () => {

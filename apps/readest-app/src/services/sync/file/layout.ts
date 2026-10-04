@@ -89,6 +89,42 @@ export const buildSettingsPath = (rootPath: string): string =>
   join(buildBasePath(rootPath), SYNC_SETTINGS_FILE);
 
 /**
+ * Imported asset kinds mirrored over a file backend. Address by `contentId`
+ * (immutable across devices), never by `bundleDir` (device-local, re-minted on
+ * receive). Layout:
+ *   Readest/Assets/manifest.json                       ← portable metadata
+ *   Readest/Assets/Fonts/<contentId>/<filename>
+ *   Readest/Assets/Textures/<contentId>/<filename>
+ *   Readest/Assets/Dictionaries/<contentId>/<filename> ← one file per file
+ */
+export type SyncAssetKind = 'font' | 'texture' | 'dictionary';
+
+const SYNC_ASSET_DIRS: Record<SyncAssetKind, string> = {
+  font: 'Fonts',
+  texture: 'Textures',
+  dictionary: 'Dictionaries',
+};
+
+/** Absolute path of the shared asset metadata manifest. */
+export const buildAssetsManifestPath = (rootPath: string): string =>
+  join(buildBasePath(rootPath), 'Assets', 'manifest.json');
+
+/** Absolute path of one asset's remote bundle directory. */
+export const buildAssetDirPath = (
+  rootPath: string,
+  kind: SyncAssetKind,
+  contentId: string,
+): string => join(buildBasePath(rootPath), 'Assets', SYNC_ASSET_DIRS[kind], contentId);
+
+/** Absolute path of one file inside an asset's remote bundle directory. */
+export const buildAssetFilePath = (
+  rootPath: string,
+  kind: SyncAssetKind,
+  contentId: string,
+  filename: string,
+): string => join(buildAssetDirPath(rootPath, kind, contentId), filename);
+
+/**
  * Friendly book file name "<sanitized title>.<ext>" used inside the
  * per-hash directory. Collisions across books are impossible because
  * each book lives in its own hash dir; collisions inside a single

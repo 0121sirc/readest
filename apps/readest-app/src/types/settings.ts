@@ -199,6 +199,11 @@ export interface WebDAVSettings {
    * backend via `Readest/settings.json`. Absent means on.
    */
   syncSettings?: boolean;
+  /**
+   * Mirror imported custom fonts, textures and dictionaries (bytes + metadata)
+   * to this backend via `Readest/Assets/`. Absent means on.
+   */
+  syncAssets?: boolean;
   // When true, "Sync now" re-checks every book instead of only those whose
   // local copy differs from the shared library.json index (the default
   // incremental walk). An escape hatch for drift or a first full sync.
@@ -243,6 +248,11 @@ export interface GoogleDriveSettings {
    * backend via `Readest/settings.json`. Absent means on.
    */
   syncSettings?: boolean;
+  /**
+   * Mirror imported custom fonts, textures and dictionaries (bytes + metadata)
+   * to this backend via `Readest/Assets/`. Absent means on.
+   */
+  syncAssets?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -277,6 +287,11 @@ export interface S3Settings {
    * backend via `Readest/settings.json`. Absent means on.
    */
   syncSettings?: boolean;
+  /**
+   * Mirror imported custom fonts, textures and dictionaries (bytes + metadata)
+   * to this backend via `Readest/Assets/`. Absent means on.
+   */
+  syncAssets?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -305,6 +320,11 @@ export interface OneDriveSettings {
    * backend via `Readest/settings.json`. Absent means on.
    */
   syncSettings?: boolean;
+  /**
+   * Mirror imported custom fonts, textures and dictionaries (bytes + metadata)
+   * to this backend via `Readest/Assets/`. Absent means on.
+   */
+  syncAssets?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;
@@ -330,6 +350,11 @@ export interface ICloudSettings {
    * backend via `Readest/settings.json`. Absent means on.
    */
   syncSettings?: boolean;
+  /**
+   * Mirror imported custom fonts, textures and dictionaries (bytes + metadata)
+   * to this backend via `Readest/Assets/`. Absent means on.
+   */
+  syncAssets?: boolean;
   fullSync?: boolean;
   strategy?: KOSyncStrategy;
   deviceId?: string;

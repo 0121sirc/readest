@@ -25,6 +25,7 @@ import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import { FileSyncEngine, type SyncLibraryResult } from '@/services/sync/file/engine';
 import type { FileSyncProvider } from '@/services/sync/file/provider';
 import { syncAppSettings } from '@/services/sync/file/settingsSync';
+import { syncAssets } from '@/services/sync/file/assetSync';
 import { withWebLock } from '@/utils/webLock';
 
 /**
@@ -125,6 +126,15 @@ const syncOneBackend = async (
       });
     } catch (e) {
       console.warn('[settingsSync] app settings sync failed', kind, e);
+    }
+  }
+
+  // Imported fonts / textures / dictionaries (bytes + metadata), same backend.
+  if (ps?.syncAssets !== false) {
+    try {
+      await syncAssets({ provider, backendKind: kind, envConfig });
+    } catch (e) {
+      console.warn('[assetSync] imported asset sync failed', kind, e);
     }
   }
 

@@ -3,6 +3,7 @@ import {
   mergeBookConfigs,
   mergeBookMetadata,
   reviveRestoredBooks,
+  sanitizeTtsConfigForBackup,
   type RevivedBook,
 } from '@/services/backupService';
 import { Book, BookConfig, BookNote } from '@/types/book';
@@ -282,5 +283,26 @@ describe('reviveRestoredBooks', () => {
     reviveRestoredBooks(revived, NOW);
     expect(revived[0]!.book.downloadedAt).toBe(NOW);
     expect(revived[0]!.book.coverDownloadedAt).toBe(NOW);
+  });
+});
+
+describe('sanitizeTtsConfigForBackup', () => {
+  const config = {
+    baseUrl: 'https://tts.example.com/v1',
+    apiKey: 'SECRET',
+    model: 'tts-1',
+    voices: 'alloy',
+    lookahead: 5,
+    blockPaddingMs: 300,
+  };
+
+  it('strips the endpoint key by default', () => {
+    const portable = sanitizeTtsConfigForBackup(config, false);
+    expect(portable.apiKey).toBe('');
+    expect(portable.baseUrl).toBe(config.baseUrl);
+  });
+
+  it('keeps the endpoint key when credentials are included', () => {
+    expect(sanitizeTtsConfigForBackup(config, true).apiKey).toBe('SECRET');
   });
 });
