@@ -2,15 +2,7 @@ import clsx from 'clsx';
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MdChevronRight } from 'react-icons/md';
-import {
-  RiDiscordLine,
-  RiCloudLine,
-  RiCloudFill,
-  RiDatabase2Line,
-  RiGoogleLine,
-  RiMicrosoftLine,
-  RiAppleLine,
-} from 'react-icons/ri';
+import { RiDiscordLine, RiCloudLine, RiCloudFill } from 'react-icons/ri';
 import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -20,15 +12,8 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
 import { saveSysSettings } from '@/helpers/settings';
 import { isCloudSyncAllowed, isReadestAccountHidden } from '@/utils/access';
-import { isWebAppPlatform } from '@/services/environment';
-import { isICloudSupportedPlatform } from '@/services/sync/providers/icloud/buildICloudProvider';
-import { getICloudContainerStatus } from '@/utils/bridge';
 import { navigateToLogin, navigateToProfile } from '@/utils/nav';
 import WebDAVForm from './integrations/WebDAVForm';
-import GoogleDriveForm from './integrations/GoogleDriveForm';
-import OneDriveForm from './integrations/OneDriveForm';
-import ICloudForm from './integrations/ICloudForm';
-import S3Form from './integrations/S3Form';
 import { persistCloudProviderEnabled } from './integrations/cloudSync';
 import {
   canToggleCloudProvider,
@@ -44,11 +29,10 @@ import {
   type CloudSyncProviderKind,
 } from '@/services/sync/cloudSyncProvider';
 import type { FileSyncBackendKind } from '@/services/sync/file/providerRegistry';
-import { canBackendRun } from '@/services/sync/file/runLibrarySync';
 import SubPageHeader from './SubPageHeader';
 import { BoxedList, NavigationRow, SectionTitle, SettingLabel, Tips } from './primitives';
 
-type SubPage = 'webdav' | 'gdrive' | 's3' | 'onedrive' | 'icloud' | 'readest-cloud' | null;
+type SubPage = 'webdav' | 'readest-cloud' | null;
 
 /**
  * Integrations panel — single point of discovery for external service config:
@@ -72,24 +56,7 @@ const IntegrationsPanel: React.FC = () => {
   // status line. Keeps the user from feeling like the run was lost
   // when they back out of the WebDAV sub-page or close the dialog.
   const isWebDAVSyncing = useFileSyncStore((s) => s.byKind.webdav?.isSyncing ?? false);
-  const isGDriveSyncing = useFileSyncStore((s) => s.byKind.gdrive?.isSyncing ?? false);
-  const isS3Syncing = useFileSyncStore((s) => s.byKind.s3?.isSyncing ?? false);
-  const isOneDriveSyncing = useFileSyncStore((s) => s.byKind.onedrive?.isSyncing ?? false);
   const webdavLastError = useFileSyncStore((s) => s.lastErrorByKind.webdav);
-  const gdriveLastError = useFileSyncStore((s) => s.lastErrorByKind.gdrive);
-  const s3LastError = useFileSyncStore((s) => s.lastErrorByKind.s3);
-  const onedriveLastError = useFileSyncStore((s) => s.lastErrorByKind.onedrive);
-  const isICloudSyncing = useFileSyncStore((s) => s.byKind.icloud?.isSyncing ?? false);
-  const icloudLastError = useFileSyncStore((s) => s.lastErrorByKind.icloud);
-  // "Configured" for iCloud = the container is reachable (an entitled build
-  // with an iCloud session). Probed once; Apple Tauri platforms only.
-  const [icloudAvailable, setICloudAvailable] = useState(false);
-  useEffect(() => {
-    if (!isICloudSupportedPlatform()) return;
-    getICloudContainerStatus()
-      .then((s) => setICloudAvailable(!!s.available && !!s.documentsPath))
-      .catch(() => setICloudAvailable(false));
-  }, []);
   // Third-party cloud sync will be a premium feature (any paid plan), but it is
   // temporarily UNGATED while the feature stabilises — `isCloudSyncAllowed`
   // returns true for every plan until `CLOUD_SYNC_REQUIRES_PREMIUM` is flipped
@@ -137,13 +104,7 @@ const IntegrationsPanel: React.FC = () => {
   // stick to the next open. Recognised values match the SubPage union.
   useEffect(() => {
     if (!requestedSubPage) return;
-    const isCloudRequest =
-      requestedSubPage === 'webdav' ||
-      requestedSubPage === 'gdrive' ||
-      requestedSubPage === 's3' ||
-      requestedSubPage === 'onedrive' ||
-      requestedSubPage === 'icloud' ||
-      requestedSubPage === 'cloudsync';
+    const isCloudRequest = requestedSubPage === 'webdav' || requestedSubPage === 'cloudsync';
     // Cloud-sync sub-pages are premium-gated. If the plan is still loading, wait
     // (don't consume the request); once known, only honor it for paid plans.
     if (isCloudRequest && !isCloudSyncPremium) {
@@ -151,19 +112,12 @@ const IntegrationsPanel: React.FC = () => {
       setRequestedSubPage(null);
       return;
     }
-    if (
-      requestedSubPage === 'webdav' ||
-      requestedSubPage === 'gdrive' ||
-      requestedSubPage === 's3' ||
-      requestedSubPage === 'onedrive' ||
-      requestedSubPage === 'icloud'
-    ) {
-      setSubPage(requestedSubPage);
+    if (requestedSubPage === 'webdav') {
+      setSubPage('webdav');
     } else if (requestedSubPage === 'cloudsync') {
-      // Back-compat with the brief unified "Cloud Sync" page. On web the
-      // Google Drive row is hidden (see the provider list), so land on the
-      // supported web backend instead of an unreachable page.
-      setSubPage(isWebAppPlatform() ? 'webdav' : 'gdrive');
+      // Back-compat with the brief unified "Cloud Sync" page; WebDAV is the
+      // supported backend on every platform in this build.
+      setSubPage('webdav');
     }
     setRequestedSubPage(null);
   }, [requestedSubPage, setRequestedSubPage, isCloudSyncPremium, userProfilePlan]);
@@ -190,140 +144,6 @@ const IntegrationsPanel: React.FC = () => {
               <li>
                 {_('{{provider}} keeps a full copy of your books, progress, and annotations.', {
                   provider: _('WebDAV'),
-                })}
-              </li>
-              <li>
-                {_(
-                  'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
-                )}
-              </li>
-            </Tips>
-          </div>
-        )}
-      </div>
-    );
-  if (subPage === 'gdrive')
-    return (
-      <div className='my-4 w-full'>
-        <SubPageHeader
-          parentLabel={_('Integrations')}
-          currentLabel={_('Google Drive')}
-          description={_(
-            'Sync your library, reading progress, and highlights with your Google Drive.',
-          )}
-          onBack={() => setSubPage(null)}
-        />
-        <GoogleDriveForm />
-        {settings.googleDrive?.enabled && (
-          <div className='mt-5'>
-            <Tips>
-              <li>
-                {_('{{provider}} keeps a full copy of your books, progress, and annotations.', {
-                  provider: _('Google Drive'),
-                })}
-              </li>
-              <li>
-                {_(
-                  'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
-                )}
-              </li>
-            </Tips>
-          </div>
-        )}
-      </div>
-    );
-  if (subPage === 's3')
-    return (
-      <div className='my-4 w-full'>
-        <SubPageHeader
-          parentLabel={_('Integrations')}
-          currentLabel={_('S3-Compatible Storage')}
-          description={_(
-            'Sync your library, reading progress, and highlights with an S3-compatible bucket such as Cloudflare R2, AWS S3, or MinIO.',
-          )}
-          onBack={() => setSubPage(null)}
-        />
-        <S3Form />
-        <div className='mt-5'>
-          <Tips>
-            {
-              <li>
-                {_('{{provider}} keeps a full copy of your books, progress, and annotations.', {
-                  provider: _('S3-Compatible Storage'),
-                })}
-              </li>
-            }
-            {
-              <li>
-                {_(
-                  'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
-                )}
-              </li>
-            }
-            {
-              <li>
-                {_(
-                  'Make sure the bucket exists and the credentials have read/write access before connecting.',
-                )}
-              </li>
-            }
-            {isWebAppPlatform() && (
-              <li>
-                {_("In the browser, the bucket must allow this site's origin in its CORS policy.")}
-              </li>
-            )}
-          </Tips>
-        </div>
-      </div>
-    );
-  if (subPage === 'onedrive')
-    return (
-      <div className='my-4 w-full'>
-        <SubPageHeader
-          parentLabel={_('Integrations')}
-          currentLabel={_('OneDrive')}
-          description={_(
-            'Sync your library, reading progress, and highlights with your Microsoft OneDrive.',
-          )}
-          onBack={() => setSubPage(null)}
-        />
-        <OneDriveForm />
-        {settings.onedrive?.enabled && (
-          <div className='mt-5'>
-            <Tips>
-              <li>
-                {_('{{provider}} keeps a full copy of your books, progress, and annotations.', {
-                  provider: _('OneDrive'),
-                })}
-              </li>
-              <li>
-                {_(
-                  'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
-                )}
-              </li>
-            </Tips>
-          </div>
-        )}
-      </div>
-    );
-  if (subPage === 'icloud')
-    return (
-      <div className='my-4 w-full'>
-        <SubPageHeader
-          parentLabel={_('Integrations')}
-          currentLabel={_('iCloud')}
-          description={_(
-            'Sync your library, reading progress, and highlights with your iCloud Drive.',
-          )}
-          onBack={() => setSubPage(null)}
-        />
-        <ICloudForm />
-        {settings.icloud?.enabled && (
-          <div className='mt-5'>
-            <Tips>
-              <li>
-                {_('{{provider}} keeps a full copy of your books, progress, and annotations.', {
-                  provider: _('iCloud'),
                 })}
               </li>
               <li>
@@ -372,7 +192,6 @@ const IntegrationsPanel: React.FC = () => {
     );
 
   const webdavConfigured = !!(settings.webdav?.serverUrl && settings.webdav?.username);
-  const gdriveConfigured = !!settings.googleDrive?.accountLabel;
   const webdavStatus = getThirdPartyRowStatus(_, {
     enabled: !!settings.webdav?.enabled,
     configured: webdavConfigured,
@@ -381,51 +200,6 @@ const IntegrationsPanel: React.FC = () => {
     lastError: webdavLastError,
     syncBooks: settings.webdav?.syncBooks ?? false,
     booksBackedUpElsewhere: booksBackedUpBy('webdav'),
-  });
-  const gdriveStatus = getThirdPartyRowStatus(_, {
-    enabled: !!settings.googleDrive?.enabled,
-    configured: gdriveConfigured,
-    syncing: isGDriveSyncing,
-    paused: cloudGate.paused,
-    lastError: gdriveLastError,
-    syncBooks: settings.googleDrive?.syncBooks ?? false,
-    booksBackedUpElsewhere: booksBackedUpBy('gdrive'),
-    // Web Google Drive with a gone/expired token can't sync until reconnected.
-    needsReauth: !canBackendRun('gdrive'),
-  });
-  const s3Configured = !!(
-    settings.s3?.endpoint &&
-    settings.s3?.bucket &&
-    settings.s3?.accessKeyId &&
-    settings.s3?.secretAccessKey
-  );
-  const s3Status = getThirdPartyRowStatus(_, {
-    enabled: !!settings.s3?.enabled,
-    configured: s3Configured,
-    syncing: isS3Syncing,
-    paused: cloudGate.paused,
-    lastError: s3LastError,
-    syncBooks: settings.s3?.syncBooks ?? false,
-    booksBackedUpElsewhere: booksBackedUpBy('s3'),
-  });
-  const onedriveConfigured = !!settings.onedrive?.accountLabel;
-  const onedriveStatus = getThirdPartyRowStatus(_, {
-    enabled: !!settings.onedrive?.enabled,
-    configured: onedriveConfigured,
-    syncing: isOneDriveSyncing,
-    paused: cloudGate.paused,
-    lastError: onedriveLastError,
-    syncBooks: settings.onedrive?.syncBooks ?? false,
-    booksBackedUpElsewhere: booksBackedUpBy('onedrive'),
-  });
-  const icloudStatus = getThirdPartyRowStatus(_, {
-    enabled: !!settings.icloud?.enabled,
-    configured: icloudAvailable,
-    syncing: isICloudSyncing,
-    paused: cloudGate.paused,
-    lastError: icloudLastError,
-    syncBooks: settings.icloud?.syncBooks ?? false,
-    booksBackedUpElsewhere: booksBackedUpBy('icloud'),
   });
   const readestStatus = getReadestCloudRowStatus(_, {
     signedIn: !!user,
@@ -466,39 +240,6 @@ const IntegrationsPanel: React.FC = () => {
                 toggleLabel={_('Sync with Readest Cloud')}
               />
             )}
-            {/* Third-party providers are premium: every row carries the tier
-                badge; on a free plan the checkbox is disabled and opening a
-                row routes to the upgrade page instead of the config sub-page.
-
-                Google Drive and OneDrive are hidden on the web build: their
-                browser flows redirect back to `window.location.origin`, which
-                only the official OAuth clients (web.readest.com + localhost)
-                have registered — a self-hosted origin fails with
-                `redirect_uri_mismatch` unless the operator registers their own
-                OAuth app, and Drive's web token has no refresh token at all.
-                Native keeps both, where the client ids and custom-scheme
-                redirects are registered at build time. WebDAV is the supported
-                web backend (it tunnels through /api/webdav). See the S3 row
-                below for the same reasoning applied to object storage. */}
-            {(appService?.isDesktopApp || appService?.isAndroidApp || appService?.isIOSApp) && (
-              <CloudProviderRow
-                icon={RiGoogleLine}
-                title={_('Google Drive')}
-                status={gdriveStatus}
-                badge={premiumBadge}
-                checked={!!settings.googleDrive?.enabled}
-                canToggle={canToggleCloudProvider({
-                  isPremium: isCloudSyncPremium,
-                  isConfigured: gdriveConfigured,
-                  isEnabled: !!settings.googleDrive?.enabled,
-                })}
-                onToggle={(next) => toggleCloudProvider('gdrive', next)}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('gdrive') : navigateToProfile(router)
-                }
-                toggleLabel={_('Sync with Google Drive')}
-              />
-            )}
             <CloudProviderRow
               icon={RiCloudLine}
               title={_('WebDAV')}
@@ -514,66 +255,6 @@ const IntegrationsPanel: React.FC = () => {
               onOpen={() => (isCloudSyncPremium ? setSubPage('webdav') : navigateToProfile(router))}
               toggleLabel={_('Sync with WebDAV')}
             />
-            {/* S3 is hidden on the web build: a browser PUT/GET signs SigV4
-                locally and needs the bucket to allow this site's origin in its
-                CORS policy, which a self-hosted deployment can't assume the
-                user has set up. Native reaches the bucket through the native
-                HTTP plugin, without CORS. WebDAV is the supported web backend. */}
-            {!isWebAppPlatform() && (
-              <CloudProviderRow
-                icon={RiDatabase2Line}
-                title={_('S3 Storage')}
-                status={s3Status}
-                badge={premiumBadge}
-                checked={!!settings.s3?.enabled}
-                canToggle={canToggleCloudProvider({
-                  isPremium: isCloudSyncPremium,
-                  isConfigured: s3Configured,
-                  isEnabled: !!settings.s3?.enabled,
-                })}
-                onToggle={(next) => toggleCloudProvider('s3', next)}
-                onOpen={() => (isCloudSyncPremium ? setSubPage('s3') : navigateToProfile(router))}
-                toggleLabel={_('Sync with S3')}
-              />
-            )}
-            {(appService?.isDesktopApp || appService?.isAndroidApp || appService?.isIOSApp) && (
-              <CloudProviderRow
-                icon={RiMicrosoftLine}
-                title={_('OneDrive')}
-                status={onedriveStatus}
-                badge={premiumBadge}
-                checked={!!settings.onedrive?.enabled}
-                canToggle={canToggleCloudProvider({
-                  isPremium: isCloudSyncPremium,
-                  isConfigured: onedriveConfigured,
-                  isEnabled: !!settings.onedrive?.enabled,
-                })}
-                onToggle={(next) => toggleCloudProvider('onedrive', next)}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('onedrive') : navigateToProfile(router)
-                }
-                toggleLabel={_('Sync with OneDrive')}
-              />
-            )}
-            {(appService?.isIOSApp || appService?.isMacOSApp) && (
-              <CloudProviderRow
-                icon={RiAppleLine}
-                title={_('iCloud')}
-                status={icloudStatus}
-                badge={premiumBadge}
-                checked={!!settings.icloud?.enabled}
-                canToggle={canToggleCloudProvider({
-                  isPremium: isCloudSyncPremium,
-                  isConfigured: icloudAvailable,
-                  isEnabled: !!settings.icloud?.enabled,
-                })}
-                onToggle={(next) => toggleCloudProvider('icloud', next)}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('icloud') : navigateToProfile(router)
-                }
-                toggleLabel={_('Sync with iCloud')}
-              />
-            )}
           </div>
         </div>
         {providers.length === 0 && (
