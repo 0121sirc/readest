@@ -65,4 +65,6 @@ apps/readest.koplugin/native/localsend-bin/target/
 
 # web_app.sh runtime files
 /.web_app.pid
+/.web_app.mode
 /.web_app.log
+/.web_app.release.log

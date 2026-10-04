@@ -62,7 +62,7 @@ Formatting/linting is **Biome**, configured at the repo root; it ignores `packag
 
 ## Local web server
 
-`./web_app.sh start|stop|restart|status` runs `pnpm dev-web` in the background on port 3000 (loads nvm Node 24 itself). PID `.web_app.pid`, log `.web_app.log`. Equivalent to `pnpm dev-web` for foreground use.
+`./web_app.sh start|stop|restart|status [--release]` runs `pnpm dev-web` in the background on port 3000 (loads nvm Node 24 itself); `--release` instead runs `pnpm build-web` then `pnpm start-web` (the build runs on every start/restart). PID `.web_app.pid`, mode `.web_app.mode`, log `.web_app.log` (dev) / `.web_app.release.log` (release). Printed URLs use the Tailscale IPv4 address when available, otherwise `localhost`. Equivalent to `pnpm dev-web` for foreground use.
 
 ## Worktrees
 
