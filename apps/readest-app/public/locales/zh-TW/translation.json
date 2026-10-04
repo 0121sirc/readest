@@ -2401,12 +2401,12 @@
   "Background": "背景",
   "Follows the theme color": "跟隨主題顏色",
   "Background Style": "背景樣式",
-  "Connected. The local library was replaced by the server content.": "__STRING_NOT_TRANSLATED__",
-  "WebDAV server changed": "__STRING_NOT_TRANSLATED__",
-  "This device was syncing with a different server, root directory or account. Choose which side the library should follow.": "__STRING_NOT_TRANSLATED__",
-  "Connect and Replace": "__STRING_NOT_TRANSLATED__",
-  "Connect and Merge": "__STRING_NOT_TRANSLATED__",
-  "Let the server replace the local library": "__STRING_NOT_TRANSLATED__",
-  "Deletes every local book, reading progress and note, then downloads the content of the server. This cannot be undone.": "__STRING_NOT_TRANSLATED__",
-  "Keeps the books on this device and merges them with the server.": "__STRING_NOT_TRANSLATED__"
+  "Connected. The local library was replaced by the server content.": "已連線。本機書庫已替換為伺服器上的內容。",
+  "WebDAV server changed": "WebDAV 伺服器已變更",
+  "This device was syncing with a different server, root directory or account. Choose which side the library should follow.": "此裝置此前同步的是另一個伺服器、根目錄或帳號。請選擇以哪一邊的書庫為準。",
+  "Connect and Replace": "連線並替換",
+  "Connect and Merge": "連線並合併",
+  "Let the server replace the local library": "讓伺服器替換本機書庫",
+  "Deletes every local book, reading progress and note, then downloads the content of the server. This cannot be undone.": "將刪除本機所有書籍、閱讀進度和筆記，然後下載伺服器上的內容。此操作無法復原。",
+  "Keeps the books on this device and merges them with the server.": "保留此裝置上的書籍，並與伺服器合併。"
 }
