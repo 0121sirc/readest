@@ -1,16 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { getRuntimeConfig } from '@/services/runtimeConfig';
-import { getServerConfig } from '@/services/serverConfig';
 
-const serverConfig = getServerConfig();
 const supabaseUrl =
-  serverConfig?.supabaseUrl ||
   getRuntimeConfig()?.supabaseUrl ||
   process.env['SUPABASE_URL'] ||
   process.env['NEXT_PUBLIC_SUPABASE_URL'] ||
   atob(process.env['NEXT_PUBLIC_DEFAULT_SUPABASE_URL_BASE64']!);
 const supabaseAnonKey =
-  serverConfig?.supabaseAnonKey ||
   getRuntimeConfig()?.supabaseAnonKey ||
   process.env['SUPABASE_ANON_KEY'] ||
   process.env['NEXT_PUBLIC_SUPABASE_ANON_KEY'] ||
@@ -24,9 +20,6 @@ const supabaseAnonKey =
 // Duplicated from `access.isReadestAccountHidden` to avoid a module cycle
 // (`access` imports this file).
 const accountHidden = (() => {
-  if (serverConfig?.disableReadestAccount !== undefined) {
-    return serverConfig.disableReadestAccount;
-  }
   const config = getRuntimeConfig();
   if (config?.disableReadestAccount !== undefined) return config.disableReadestAccount;
   const raw = process.env['NEXT_PUBLIC_DISABLE_READEST_ACCOUNT'];

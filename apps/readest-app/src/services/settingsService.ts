@@ -25,10 +25,8 @@ import {
   DEFAULT_WORD_LENS_CONFIG,
   DEFAULT_EINK_VIEW_SETTINGS,
   DEFAULT_VIEW_SETTINGS_CONFIG,
-  DEFAULT_SERVER_SETTINGS,
 } from './constants';
 import { DEFAULT_AI_SETTINGS } from './ai/constants';
-import { setServerConfig } from './serverConfig';
 import { getTargetLang, isCJKEnv } from '@/utils/misc';
 import { safeLoadJSON, safeSaveJSON } from './persistence';
 
@@ -165,11 +163,6 @@ export async function loadSettings(ctx: Context): Promise<SystemSettings> {
     ...DEFAULT_AI_SETTINGS,
     ...settings.aiSettings,
   };
-  settings.server = {
-    ...DEFAULT_SERVER_SETTINGS,
-    ...settings.server,
-  };
-  setServerConfig(settings.server);
 
   settings.localBooksDir = await ctx.fs.getPrefix('Books');
 
@@ -238,7 +231,6 @@ export async function saveSettings(fs: FileSystem, settings: SystemSettings): Pr
         ? { ...next, bookshelves: mergeBookshelfStates(disk.bookshelves, next.bookshelves) }
         : next;
     await safeSaveJSON(fs, SETTINGS_FILENAME, 'Settings', merged);
-    setServerConfig(merged.server);
     if (pendingSettings === next) pendingSettings = null;
   };
   settingsWrites = settingsWrites.catch(() => {}).then(write);

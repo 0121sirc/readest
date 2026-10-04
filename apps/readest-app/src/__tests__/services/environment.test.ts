@@ -151,42 +151,6 @@ describe('environment', () => {
     });
   });
 
-  // ── server settings ────────────────────────────────────────────
-  describe('configured server settings', () => {
-    const emptyServer = {
-      apiBaseUrl: '',
-      nodeApiBaseUrl: '',
-      supabaseUrl: '',
-      supabaseAnonKey: '',
-    };
-
-    test('getBaseUrl prefers the configured apiBaseUrl over runtime/env', async () => {
-      const { setServerConfig } = await import('@/services/serverConfig');
-      setServerConfig({ ...emptyServer, apiBaseUrl: 'https://self.example.com' });
-      window.__READEST_RUNTIME_CONFIG = { apiBaseUrl: 'https://runtime.example.com' };
-      env['NEXT_PUBLIC_API_BASE_URL'] = 'https://custom-api.example.com';
-      const { getBaseUrl, getAPIBaseUrl } = await import('@/services/environment');
-      expect(getBaseUrl()).toBe('https://self.example.com');
-      expect(getAPIBaseUrl()).toBe('https://self.example.com/api');
-    });
-
-    test('getNodeBaseUrl prefers the configured nodeApiBaseUrl', async () => {
-      const { setServerConfig } = await import('@/services/serverConfig');
-      setServerConfig({ ...emptyServer, nodeApiBaseUrl: 'https://self-node.example.com' });
-      const { getNodeBaseUrl } = await import('@/services/environment');
-      expect(getNodeBaseUrl()).toBe('https://self-node.example.com');
-    });
-
-    test('blank server values fall through to the env / built-in defaults', async () => {
-      const { setServerConfig } = await import('@/services/serverConfig');
-      setServerConfig(emptyServer);
-      env['NEXT_PUBLIC_API_BASE_URL'] = 'https://custom-api.example.com';
-      const { getBaseUrl, getNodeBaseUrl } = await import('@/services/environment');
-      expect(getBaseUrl()).toBe('https://custom-api.example.com');
-      expect(getNodeBaseUrl()).toBe('https://node.readest.com');
-    });
-  });
-
   // ── isMacPlatform ──────────────────────────────────────────────
   describe('isMacPlatform', () => {
     test('returns true when navigator.platform contains Mac', async () => {
